@@ -212,6 +212,13 @@ export default function StaffHomePage() {
                 desc="Edit weekday/sat/sun rates"
                 href="/manager/pay-rates"
               />
+
+              {/* New Invoice link */}
+              <CardButton
+                title="Invoices"
+                desc="Manage and input invoices"
+                href="/manager/invoices"
+              />
             </div>
 
             <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
