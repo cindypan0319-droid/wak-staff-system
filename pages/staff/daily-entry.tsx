@@ -498,6 +498,10 @@ export default function DailyEntryPage() {
           Save Closing (Cashup + Sales)
         </button>
 
+        <button onClick={() => (window.location.href = "/staff/home")}>
+          ← Back to Home
+        </button>
+
         {loading && <span>Loading...</span>}
       </div>
 
