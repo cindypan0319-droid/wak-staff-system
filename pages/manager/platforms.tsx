@@ -247,7 +247,7 @@ export default function PlatformsPage() {
   if (!isManagerOrOwner) {
     return (
       <div style={{ padding: 20 }}>
-        <h1>Manager — Platforms</h1>
+        <h1>Platforms</h1>
         <div style={{ padding: 12, border: "1px solid #ddd", marginTop: 12 }}>
           <b>Access denied.</b> This page is only for <b>Owner / Manager</b>.
           <br />
@@ -259,7 +259,12 @@ export default function PlatformsPage() {
 
   return (
     <div style={{ padding: 20, maxWidth: 1050 }}>
-      <h1>Manager — Platforms</h1>
+            <div style={{ marginBottom: 12 }}>
+        <button onClick={() => (window.location.href = "/staff/home")}>
+          ← Back to Home
+        </button>
+      </div>
+      <h1>Platforms Commission</h1>
 
       {!isOwner && (
         <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>
@@ -299,8 +304,8 @@ export default function PlatformsPage() {
 
               {isOwner && (
                 <>
-                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Commission %</th>
-                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Subscription fee (daily)</th>
+                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Commission </th>
+                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Subscription fee </th>
                   <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Save fee</th>
                 </>
               )}

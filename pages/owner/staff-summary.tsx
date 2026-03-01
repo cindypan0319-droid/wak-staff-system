@@ -9,7 +9,6 @@ type Shift = {
   shift_start: string;
   shift_end: string;
   break_minutes?: number | null;
-  hourly_rate?: number | null;
 };
 
 type TimeClock = {
@@ -21,9 +20,6 @@ type TimeClock = {
 
   adjusted_clock_in_at?: string | null;
   adjusted_clock_out_at?: string | null;
-  adjusted_reason?: string | null;
-  adjusted_by?: string | null;
-  adjusted_at?: string | null;
 };
 
 type Profile = {
@@ -34,22 +30,13 @@ type Profile = {
 };
 
 type StaffPayRate = {
-  id?: any;
   staff_id: string;
   weekday_rate?: number | null;
   saturday_rate?: number | null;
   sunday_rate?: number | null;
-  store_id?: string | null;
 };
 
 type DayType = "WEEKDAY" | "SATURDAY" | "SUNDAY";
-
-function fmtAU(iso: string | null | undefined) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
-  return d.toLocaleString("en-AU", { timeZone: "Australia/Melbourne" });
-}
 
 function money(n: number | null | undefined) {
   if (n === null || n === undefined || Number.isNaN(n)) return "-";
@@ -74,8 +61,6 @@ function addDays(dateStr: string, days: number) {
   return d.toISOString();
 }
 
-// From/To are DATE input values (YYYY-MM-DD), To is inclusive.
-// Range end is exclusive: (to + 1 day) 00:00
 function buildRange(fromDate: string, toDate: string): Range {
   const startISO = new Date(`${fromDate}T00:00:00`).toISOString();
   const endISO = addDays(toDate, 1);
@@ -96,16 +81,16 @@ function getDayTypeByISO(iso: string): DayType {
   return "WEEKDAY";
 }
 
-export default function ClockAdjustmentPage() {
-  // -------- Permission Gate --------
+export default function OwnerStaffSummaryPage() {
+  // -------- Permission Gate (OWNER ONLY) --------
   const [authLoading, setAuthLoading] = useState(true);
   const [viewerRole, setViewerRole] = useState<string | null>(null);
-  const [viewerId, setViewerId] = useState<string | null>(null);
 
-  const isManagerOrOwner = viewerRole === "OWNER" || viewerRole === "MANAGER";
+  const isOwner = viewerRole === "OWNER";
 
   async function loadPermission() {
     setAuthLoading(true);
+
     const { data } = await supabase.auth.getUser();
     const user = data?.user;
 
@@ -113,8 +98,6 @@ export default function ClockAdjustmentPage() {
       window.location.href = "/";
       return;
     }
-
-    setViewerId(user.id);
 
     const { data: profile, error } = await supabase
       .from("profiles")
@@ -151,11 +134,6 @@ export default function ClockAdjustmentPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [payRates, setPayRates] = useState<StaffPayRate[]>([]);
 
-  // edit state
-  const [editIn, setEditIn] = useState<Record<number, string>>({});
-  const [editOut, setEditOut] = useState<Record<number, string>>({});
-  const [editReason, setEditReason] = useState<Record<number, string>>({});
-
   const nameById = useMemo(() => {
     const map: Record<string, string> = {};
     for (const p of profiles) {
@@ -185,7 +163,7 @@ export default function ClockAdjustmentPage() {
   }
 
   async function fetchData() {
-    if (!isManagerOrOwner) return;
+    if (!isOwner) return;
 
     setLoading(true);
     setMsg("");
@@ -241,7 +219,7 @@ export default function ClockAdjustmentPage() {
   }
 
   useEffect(() => {
-    if (!authLoading && isManagerOrOwner) fetchData();
+    if (!authLoading && isOwner) fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, viewerRole]);
 
@@ -275,77 +253,7 @@ export default function ClockAdjustmentPage() {
     return candidates[0];
   }
 
-  // -------- Actions --------
-  async function createClockForShift(shift: Shift) {
-    setLoading(true);
-    setMsg("");
-    try {
-      const payload: any = {
-        shift_id: shift.id,
-        staff_id: shift.staff_id,
-        clock_in_at: shift.shift_start,
-        clock_out_at: shift.shift_end,
-        device_tag: "MANUAL_CREATE",
-      };
-
-      const { error } = await supabase.from("time_clock").insert(payload);
-      if (error) return setMsg("Create clock failed: " + error.message);
-
-      setMsg("Clock record created.");
-      await fetchData();
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function saveAdjustment(clockId: number) {
-    setLoading(true);
-    setMsg("");
-    try {
-      const inLocal = editIn[clockId] ?? "";
-      const outLocal = editOut[clockId] ?? "";
-      const reason = (editReason[clockId] ?? "").trim();
-
-      const adjustedInISO = inLocal ? new Date(inLocal).toISOString() : null;
-      const adjustedOutISO = outLocal ? new Date(outLocal).toISOString() : null;
-
-      if (!adjustedInISO || !adjustedOutISO) return setMsg("Please select both adjusted Clock In and Clock Out.");
-      if (!reason) return setMsg("Please enter a reason (required).");
-
-      const payload: any = {
-        adjusted_clock_in_at: adjustedInISO,
-        adjusted_clock_out_at: adjustedOutISO,
-        adjusted_reason: reason,
-        adjusted_by: viewerId,
-        adjusted_at: new Date().toISOString(),
-      };
-
-      const { error } = await supabase.from("time_clock").update(payload).eq("id", clockId);
-      if (error) return setMsg("Save failed: " + error.message);
-
-      setMsg("Adjustment saved.");
-      await fetchData();
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function setToRoster(clockId: number, shift: Shift) {
-    const inVal = new Date(shift.shift_start);
-    const outVal = new Date(shift.shift_end);
-
-    const toLocal = (d: Date) => {
-      const pad = (n: number) => String(n).padStart(2, "0");
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
-        d.getMinutes()
-      )}`;
-    };
-
-    setEditIn((p) => ({ ...p, [clockId]: toLocal(inVal) }));
-    setEditOut((p) => ({ ...p, [clockId]: toLocal(outVal) }));
-  }
-
-  // -------- Payroll logic --------
+  // -------- Payroll rule (Adjusted -> Raw -> Roster) --------
   function getPayrollMinutes(shift: Shift, clock: TimeClock | null) {
     const breakMin = shift.break_minutes ?? 0;
 
@@ -364,7 +272,7 @@ export default function ClockAdjustmentPage() {
     const source =
       adjWorkMin !== null ? "ADJUSTED" : rawWorkMin !== null ? "RAW" : rosterWorkMin !== null ? "ROSTER" : "NONE";
 
-    return { breakMin, rosterWorkMin, rawWorkMin, adjWorkMin, payrollWorkMin, source };
+    return { payrollWorkMin, source };
   }
 
   const filteredShifts = useMemo(() => {
@@ -383,11 +291,10 @@ export default function ClockAdjustmentPage() {
       const payrollHours = payroll.payrollWorkMin !== null ? round2(payroll.payrollWorkMin / 60) : null;
       const pay = payrollHours !== null && rate !== null ? round2(payrollHours * rate) : null;
 
-      return { shift, clock, payroll, dayType, rate, payrollHours, pay };
+      return { shift, payroll, dayType, rate, payrollHours, pay };
     });
   }, [filteredShifts, clocks, payRateByStaffId]);
 
-  // -------- Summary (overall) --------
   const overallSummary = useMemo(() => {
     let totalMin = 0;
     let totalPay = 0;
@@ -403,7 +310,84 @@ export default function ClockAdjustmentPage() {
     };
   }, [rows]);
 
-  // dropdown staff list
+  // -------- Per staff summary --------
+  type StaffAgg = {
+    staff_id: string;
+    staff_name: string;
+
+    weekdayMin: number;
+    saturdayMin: number;
+    sundayMin: number;
+
+    weekdayPay: number;
+    saturdayPay: number;
+    sundayPay: number;
+
+    weekdayRate: number | null;
+    saturdayRate: number | null;
+    sundayRate: number | null;
+  };
+
+  const perStaffSummary = useMemo(() => {
+    const map: Record<string, StaffAgg> = {};
+
+    const ensure = (staffId: string): StaffAgg => {
+      if (map[staffId]) return map[staffId];
+
+      const weekdayRate = rateFor(staffId, "WEEKDAY");
+      const saturdayRate = rateFor(staffId, "SATURDAY");
+      const sundayRate = rateFor(staffId, "SUNDAY");
+
+      map[staffId] = {
+        staff_id: staffId,
+        staff_name: staffLabel(staffId),
+
+        weekdayMin: 0,
+        saturdayMin: 0,
+        sundayMin: 0,
+
+        weekdayPay: 0,
+        saturdayPay: 0,
+        sundayPay: 0,
+
+        weekdayRate,
+        saturdayRate,
+        sundayRate,
+      };
+
+      return map[staffId];
+    };
+
+    for (const r of rows) {
+      const staffId = r.shift.staff_id;
+      const agg = ensure(staffId);
+
+      const min = r.payroll.payrollWorkMin ?? 0;
+      const hrs = min / 60;
+
+      if (r.dayType === "WEEKDAY") {
+        agg.weekdayMin += min;
+        if (agg.weekdayRate !== null) agg.weekdayPay += hrs * agg.weekdayRate;
+      } else if (r.dayType === "SATURDAY") {
+        agg.saturdayMin += min;
+        if (agg.saturdayRate !== null) agg.saturdayPay += hrs * agg.saturdayRate;
+      } else {
+        agg.sundayMin += min;
+        if (agg.sundayRate !== null) agg.sundayPay += hrs * agg.sundayRate;
+      }
+    }
+
+    const list = Object.values(map).map((a) => ({
+      ...a,
+      weekdayPay: round2(a.weekdayPay),
+      saturdayPay: round2(a.saturdayPay),
+      sundayPay: round2(a.sundayPay),
+    }));
+
+    list.sort((x, y) => x.staff_name.localeCompare(y.staff_name));
+    return list;
+  }, [rows, nameById, payRateByStaffId]);
+
   const staffOptions = useMemo(() => {
     const list = profiles
       .filter((p) => p?.id && (p.is_active === undefined || p.is_active === null || p.is_active === true))
@@ -413,20 +397,15 @@ export default function ClockAdjustmentPage() {
     return list;
   }, [profiles]);
 
-  // -------- UI: permission --------
+  // -------- UI --------
   if (authLoading) return <div style={{ padding: 20 }}>Loading permission...</div>;
 
-  if (!isManagerOrOwner) {
+  if (!isOwner) {
     return (
       <div style={{ padding: 20 }}>
-              <div style={{ marginBottom: 12 }}>
-        <button onClick={() => (window.location.href = "/staff/home")}>
-          ← Back to Home
-        </button>
-      </div>
-        <h1>Roster and Time Clock Adjustment</h1>
+        <h1>Staff Summary (hours & pay)</h1>
         <div style={{ padding: 12, border: "1px solid #ddd", marginTop: 12 }}>
-          <b>Access denied.</b> This page is only for <b>Owner / Manager</b>.
+          <b>Access denied.</b> This page is only for <b>Owner</b>.
           <br />
           Your role: <b>{viewerRole ?? "UNKNOWN"}</b>
         </div>
@@ -436,12 +415,12 @@ export default function ClockAdjustmentPage() {
 
   return (
     <div style={{ padding: 20 }}>
-            <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 12 }}>
         <button onClick={() => (window.location.href = "/staff/home")}>
           ← Back to Home
         </button>
       </div>
-      <h1>Roster and Time Clock Adjustment</h1>
+      <h1>Staff Payroll Summary (hours & pay)</h1>
 
       {/* Filters */}
       <div
@@ -503,8 +482,8 @@ export default function ClockAdjustmentPage() {
 
       {msg && <div style={{ padding: 10, border: "1px solid #ddd", marginBottom: 10 }}>{msg}</div>}
 
-      {/* Overall Summary (hours) */}
-      <div style={{ padding: 10, border: "1px solid #ddd", marginBottom: 10 }}>
+      {/* Overall summary */}
+      <div style={{ padding: 10, border: "1px solid #ddd", marginBottom: 14 }}>
         <b>Summary:</b>{" "}
         <span style={{ marginLeft: 8 }}>
           <b>{overallSummary.totalHours.toFixed(2)}</b> hours, <b>{money(overallSummary.totalPay)}</b>
@@ -514,142 +493,65 @@ export default function ClockAdjustmentPage() {
         </div>
       </div>
 
-      {/* Main Table */}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Staff</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Shift Start</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Shift End</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Day</th>
+      {/* Per staff vertical summary */}
+      <div style={{ marginTop: 10 }}>
+        {perStaffSummary.length === 0 ? (
+          <div style={{ color: "#999" }}>No data.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {perStaffSummary.map((s) => {
+              const weekdayHours = round2(s.weekdayMin / 60);
+              const saturdayHours = round2(s.saturdayMin / 60);
+              const sundayHours = round2(s.sundayMin / 60);
 
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Raw In</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Raw Out</th>
+              const totalHours = round2((s.weekdayMin + s.saturdayMin + s.sundayMin) / 60);
+              const totalPay = round2(s.weekdayPay + s.saturdayPay + s.sundayPay);
 
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Adjusted In</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Adjusted Out</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Reason</th>
+              return (
+                <div key={s.staff_id} style={{ border: "1px solid #ddd", padding: 10 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>{s.staff_name}</div>
 
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Payroll source</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Hours</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Payrate</th>
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Pay</th>
-
-            <th style={{ borderBottom: "1px solid #ddd", textAlign: "left" }}>Actions</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {rows.map((r) => {
-            const shift = r.shift;
-            const clock = r.clock;
-            const hasClock = !!clock;
-            const clockId = clock?.id ?? -1;
-
-            const adjustedInValue = clockId !== -1 && editIn[clockId] !== undefined ? editIn[clockId] : "";
-            const adjustedOutValue = clockId !== -1 && editOut[clockId] !== undefined ? editOut[clockId] : "";
-            const reasonValue =
-              clockId !== -1 && editReason[clockId] !== undefined ? editReason[clockId] : clock?.adjusted_reason ?? "";
-
-            const hoursText = r.payrollHours === null ? "-" : `${r.payrollHours.toFixed(2)}`;
-
-            return (
-              <tr key={shift.id}>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{staffLabel(shift.staff_id)}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{fmtAU(shift.shift_start)}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{fmtAU(shift.shift_end)}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  {r.dayType === "WEEKDAY" ? "Weekday" : r.dayType === "SATURDAY" ? "Saturday" : "Sunday"}
-                </td>
-
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{fmtAU(clock?.clock_in_at ?? null)}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{fmtAU(clock?.clock_out_at ?? null)}</td>
-
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  {!hasClock ? (
-                    <span style={{ color: "#999" }}>No clock record</span>
-                  ) : (
-                    <input
-                      type="datetime-local"
-                      value={
-                        adjustedInValue ||
-                        (clock?.adjusted_clock_in_at ? new Date(clock.adjusted_clock_in_at).toISOString().slice(0, 16) : "")
-                      }
-                      onChange={(e) => setEditIn((p) => ({ ...p, [clockId]: e.target.value }))}
-                    />
-                  )}
-                </td>
-
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  {!hasClock ? (
-                    <span style={{ color: "#999" }}>No clock record</span>
-                  ) : (
-                    <input
-                      type="datetime-local"
-                      value={
-                        adjustedOutValue ||
-                        (clock?.adjusted_clock_out_at ? new Date(clock.adjusted_clock_out_at).toISOString().slice(0, 16) : "")
-                      }
-                      onChange={(e) => setEditOut((p) => ({ ...p, [clockId]: e.target.value }))}
-                    />
-                  )}
-                </td>
-
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  {!hasClock ? (
-                    <span style={{ color: "#999" }}>-</span>
-                  ) : (
-                    <input
-                      placeholder="Reason (required)"
-                      style={{ width: 200 }}
-                      value={reasonValue}
-                      onChange={(e) => setEditReason((p) => ({ ...p, [clockId]: e.target.value }))}
-                    />
-                  )}
-                </td>
-
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{r.payroll.source}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  <b>{hoursText}</b>
-                </td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{r.rate === null ? "-" : money(r.rate)}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  <b>{money(r.pay)}</b>
-                </td>
-
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  {!hasClock ? (
-                    <button onClick={() => createClockForShift(shift)} disabled={loading}>
-                      Create clock
-                    </button>
-                  ) : (
-                    <>
-                      <button onClick={() => setToRoster(clockId, shift)} disabled={loading} style={{ marginRight: 8 }}>
-                        Set to roster
-                      </button>
-                      <button onClick={() => saveAdjustment(clockId)} disabled={loading} style={{ marginRight: 8 }}>
-                        Save
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={14} style={{ padding: 12, color: "#999" }}>
-                No shifts found in this date range.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      {/* ✅ Staff Summary moved out to owner page */}
-      <div style={{ marginTop: 18, fontSize: 12, color: "#666" }}>
-        Staff Summary (hours & pay) is now available in the Owner page.
+                  <table style={{ width: 520, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Type</th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Hours</th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Payrate</th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Pay</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style={{ padding: "6px 0" }}>Weekday</td>
+                        <td>{weekdayHours.toFixed(2)}</td>
+                        <td>{s.weekdayRate === null ? "-" : money(s.weekdayRate)}</td>
+                        <td>{money(s.weekdayPay)}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: "6px 0" }}>Saturday</td>
+                        <td>{saturdayHours.toFixed(2)}</td>
+                        <td>{s.saturdayRate === null ? "-" : money(s.saturdayRate)}</td>
+                        <td>{money(s.saturdayPay)}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: "6px 0" }}>Sunday</td>
+                        <td>{sundayHours.toFixed(2)}</td>
+                        <td>{s.sundayRate === null ? "-" : money(s.sundayRate)}</td>
+                        <td>{money(s.sundayPay)}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ paddingTop: 8, fontWeight: 700 }}>Total</td>
+                        <td style={{ paddingTop: 8, fontWeight: 700 }}>{totalHours.toFixed(2)}</td>
+                        <td style={{ paddingTop: 8, fontWeight: 700 }}>-</td>
+                        <td style={{ paddingTop: 8, fontWeight: 700 }}>{money(totalPay)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

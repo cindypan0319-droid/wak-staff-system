@@ -74,7 +74,7 @@ export default function Home() {
 
   return (
     <div style={{ padding: 20, maxWidth: 520 }}>
-      <h1>WOK Staff Login</h1>
+      <h1>Wot A Kebab - Mooroolbark</h1>
 
       {msg && (
         <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>

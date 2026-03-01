@@ -696,7 +696,12 @@ export default function RosterWeek() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>Roster — Weekly (Thu → Wed) — Editable + Payroll + Unavailable</h1>
+            <div style={{ marginBottom: 12 }}>
+        <button onClick={() => (window.location.href = "/staff/home")}>
+          ← Back to Home
+        </button>
+      </div>
+      <h1>Roster — Weekly (Thu → Wed)</h1>
 
       <div style={{ marginBottom: 10 }}>
         Week Start (THU):{" "}

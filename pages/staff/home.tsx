@@ -51,7 +51,10 @@ export default function StaffHomePage() {
   const [fullName, setFullName] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
 
+  const isOwner = useMemo(() => role === "OWNER", [role]);
+  const isManager = useMemo(() => role === "MANAGER", [role]);
   const isManagerOrOwner = useMemo(() => role === "OWNER" || role === "MANAGER", [role]);
+
   const canUseStaffPages = useMemo(
     () => role === "OWNER" || role === "MANAGER" || role === "STAFF",
     [role]
@@ -118,7 +121,7 @@ export default function StaffHomePage() {
   if (!canUseStaffPages) {
     return (
       <div style={{ padding: 20 }}>
-        <h1>Staff — Home</h1>
+        <h1>Home</h1>
         <div style={{ border: "1px solid #ddd", padding: 12, marginTop: 12 }}>
           Access denied. Role: <b>{role}</b>
         </div>
@@ -134,7 +137,7 @@ export default function StaffHomePage() {
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <h1 style={{ margin: 0 }}>Staff — Home</h1>
+            <h1 style={{ margin: 0 }}>Home</h1>
             <div style={{ marginTop: 6, color: "#333" }}>
               Welcome, <b>{fullName ?? email ?? "-"}</b> | Role: <b>{role}</b>
             </div>
@@ -154,7 +157,7 @@ export default function StaffHomePage() {
           </div>
         )}
 
-        {/* Staff tools */}
+        {/* My Tools */}
         <div style={{ marginTop: 16 }}>
           <h2>My Tools</h2>
           <div
@@ -171,10 +174,10 @@ export default function StaffHomePage() {
           </div>
         </div>
 
-        {/* Manager / Owner tools */}
+        {/* Manager Tools (Manager OR Owner can see) */}
         {isManagerOrOwner && (
           <div style={{ marginTop: 24 }}>
-            <h2>Manager / Owner Tools</h2>
+            <h2>Manager Tools</h2>
 
             <div
               style={{
@@ -196,15 +199,37 @@ export default function StaffHomePage() {
               />
 
               <CardButton
-                title="Platform"
-                desc="Manage platforms / commission settings"
-                href="/manager/platforms"
-              />
-
-              <CardButton
                 title="Employees"
                 desc="Create staff, edit role, set PIN"
                 href="/manager/employees"
+              />
+
+              <CardButton
+                title="Invoices"
+                desc="Manage and input invoices"
+                href="/manager/invoices"
+              />
+            </div>
+
+          </div>
+        )}
+
+        {/* Owner Tools (OWNER ONLY) */}
+        {isOwner && (
+          <div style={{ marginTop: 24 }}>
+            <h2>Owner Tools</h2>
+
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+              }}
+            >
+              <CardButton
+                title="Platform"
+                desc="Manage platforms / commission settings"
+                href="/manager/platforms"
               />
 
               <CardButton
@@ -213,16 +238,18 @@ export default function StaffHomePage() {
                 href="/manager/pay-rates"
               />
 
-              {/* New Invoice link */}
               <CardButton
-                title="Invoices"
-                desc="Manage and input invoices"
-                href="/manager/invoices"
+                title="Staff Summary"
+                desc="Hours & pay summary (Owner only)"
+                href="/owner/staff-summary"
               />
-            </div>
 
-            <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-              Note: "Roster" (old page) is removed from Home as you requested.
+              {/* ✅ Dashboard: keep your existing page path here */}
+              <CardButton
+                title="Dashboard"
+                desc="Business overview (Owner only)"
+                href="/owner/dashboard"
+              />
             </div>
           </div>
         )}

@@ -206,6 +206,11 @@ export default function PayRatesPage() {
 
   return (
     <div style={{ padding: 20 }}>
+            <div style={{ marginBottom: 12 }}>
+        <button onClick={() => (window.location.href = "/staff/home")}>
+          ← Back to Home
+        </button>
+      </div>
       <h1>Manager — Staff Pay Rates</h1>
 
       <div style={{ marginBottom: 12 }}>

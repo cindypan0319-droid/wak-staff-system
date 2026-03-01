@@ -229,7 +229,12 @@ export default function EmployeesPage() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>Manager — Employees</h1>
+            <div style={{ marginBottom: 12 }}>
+        <button onClick={() => (window.location.href = "/staff/home")}>
+          ← Back to Home
+        </button>
+      </div>
+      <h1>Employees Infomation</h1>
 
       {msg && <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>{msg}</div>}
       {loading && <div style={{ marginBottom: 12 }}>Loading…</div>}
