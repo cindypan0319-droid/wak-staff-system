@@ -151,15 +151,15 @@ export default function StaffClockHistoryPage() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>Staff — Clock History (Last 7 Days)</h1>
+      <h1>Clock History (Last 7 Days)</h1>
 
       <div style={{ marginBottom: 8 }}>
         Logged in as: <b>{userEmail}</b> | Role: <b>{role}</b>
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
-        <Link href="/staff/clock">
-          <button>Back to Time Clock</button>
+        <Link href="/staff/home">
+          <button>Back to Home</button>
         </Link>
         <button onClick={loadHistory} disabled={loading}>
           Refresh

@@ -103,6 +103,11 @@ function hhmm_to_hhmmss(t: string) {
   return t.length === 5 ? `${t}:00` : t;
 }
 
+// ✅ NEW: format date for header (e.g. "05 Mar")
+function fmtHeaderDate(d: Date) {
+  return d.toLocaleDateString([], { day: "2-digit", month: "short" });
+}
+
 export default function RosterWeek() {
   const [storeId] = useState("MOOROOLBARK");
 
@@ -122,12 +127,24 @@ export default function RosterWeek() {
     return { start, end };
   }, [weekStart]);
 
+  // ✅ NEW: 7 dates for table header (Thu..Wed)
+  const dayDates = useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(range.start);
+      d.setDate(d.getDate() + i);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    });
+  }, [range.start]);
+
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [rows, setRows] = useState<ShiftCostRow[]>([]);
   const [oneOff, setOneOff] = useState<UnavailOneOffRow[]>([]);
   const [recRules, setRecRules] = useState<UnavailRecurringRule[]>([]);
   const [recOverrides, setRecOverrides] = useState<RecurringOverride[]>([]);
   const [msg, setMsg] = useState("");
+  const [isPublished, setIsPublished] = useState<boolean>(false);
+  const [pubLoading, setPubLoading] = useState<boolean>(false);
 
   // edit shift
   const [editingShiftId, setEditingShiftId] = useState<number | null>(null);
@@ -251,6 +268,75 @@ export default function RosterWeek() {
     await loadRecurringOverrides();
   }
 
+  async function loadPublishedStatus() {
+    const r = await supabase
+      .from("roster_weeks")
+      .select("published")
+      .eq("store_id", storeId)
+      .eq("week_start", weekStart)
+      .maybeSingle();
+
+    // if no row, treat as draft
+    if (r.error) {
+      console.log(r.error);
+      setIsPublished(false);
+      return;
+    }
+    setIsPublished(!!r.data?.published);
+  }
+
+  async function publishWeek() {
+    setMsg("");
+    setPubLoading(true);
+
+    const { data: userData } = await supabase.auth.getUser();
+    const uid = userData.user?.id ?? null;
+
+    const up = await supabase.from("roster_weeks").upsert(
+      [
+        {
+          store_id: storeId,
+          week_start: weekStart,
+          published: true,
+          published_at: new Date().toISOString(),
+          published_by: uid,
+        },
+      ],
+      { onConflict: "store_id,week_start" }
+    );
+
+    setPubLoading(false);
+
+    if (up.error) {
+      setMsg("❌ Publish failed: " + up.error.message);
+      return;
+    }
+
+    setMsg("✅ Published! Staff can now see this week.");
+    await loadPublishedStatus();
+  }
+
+  async function unpublishWeek() {
+    setMsg("");
+    setPubLoading(true);
+
+    const up = await supabase
+      .from("roster_weeks")
+      .update({ published: false, published_at: null, published_by: null })
+      .eq("store_id", storeId)
+      .eq("week_start", weekStart);
+
+    setPubLoading(false);
+
+    if (up.error) {
+      setMsg("❌ Unpublish failed: " + up.error.message);
+      return;
+    }
+
+    setMsg("✅ Unpublished. Staff can NOT see this week now.");
+    await loadPublishedStatus();
+  }
+
   useEffect(() => {
     loadProfiles();
   }, []);
@@ -260,6 +346,7 @@ export default function RosterWeek() {
     loadOneOffUnavailability();
     loadRecurringRules();
     loadRecurringOverrides();
+    loadPublishedStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart]);
 
@@ -269,7 +356,7 @@ export default function RosterWeek() {
     rows.forEach((r) => set.add(r.staff_id));
     oneOff.forEach((u) => set.add(u.staff_id));
     recRules.forEach((u) => set.add(u.staff_id));
-    return Array.from(set);
+    return Array.from(set).sort((a, b) => staffName(a).localeCompare(staffName(b)));
   }, [profiles, rows, oneOff, recRules]);
 
   // shifts grid
@@ -696,10 +783,8 @@ export default function RosterWeek() {
 
   return (
     <div style={{ padding: 20 }}>
-            <div style={{ marginBottom: 12 }}>
-        <button onClick={() => (window.location.href = "/staff/home")}>
-          ← Back to Home
-        </button>
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={() => (window.location.href = "/staff/home")}>← Back to Home</button>
       </div>
       <h1>Roster — Weekly (Thu → Wed)</h1>
 
@@ -717,6 +802,20 @@ export default function RosterWeek() {
         <button onClick={exportPayrollDetail} style={{ marginLeft: 8 }}>
           Export Payroll (Detail CSV)
         </button>
+
+        <span style={{ marginLeft: 12, fontWeight: 800 }}>
+          Status: {isPublished ? "PUBLISHED" : "DRAFT"}
+        </span>
+
+        {!isPublished ? (
+          <button onClick={publishWeek} style={{ marginLeft: 8 }} disabled={pubLoading}>
+            Publish this week
+          </button>
+        ) : (
+          <button onClick={unpublishWeek} style={{ marginLeft: 8 }} disabled={pubLoading}>
+            Unpublish
+          </button>
+        )}
       </div>
 
       {msg && <div style={{ marginBottom: 10 }}>{msg}</div>}
@@ -731,6 +830,12 @@ export default function RosterWeek() {
               {dayLabels.map((d, i) => (
                 <th key={d} style={{ border: "1px solid #ccc" }}>
                   <div style={{ fontWeight: 800 }}>{d}</div>
+
+                  {/* ✅ NEW: show the actual date under MON/TUE... */}
+                  <div style={{ fontSize: 12, color: "#444", marginTop: 2 }}>
+                    {fmtHeaderDate(dayDates[i])}
+                  </div>
+
                   <div style={{ fontSize: 12, color: "#666" }}>
                     Day total: {dailyTotals[i].hours.toFixed(2)}h | ${dailyTotals[i].wage.toFixed(2)}
                   </div>
@@ -798,10 +903,17 @@ export default function RosterWeek() {
                           <div style={{ fontSize: 12, marginBottom: 6 }}>
                             <b>Unavailable</b>
                             {dayUnav.slice(0, 2).map((u) => (
-                              <div key={`${u.kind}-${u.id}`} style={{ color: u.kind === "recurring" && u.isSkippedThisWeek ? "#999" : "#666" }}>
+                              <div
+                                key={`${u.kind}-${u.id}`}
+                                style={{ color: u.kind === "recurring" && u.isSkippedThisWeek ? "#999" : "#666" }}
+                              >
                                 {fmtTime(u.start_at)}–{fmtTime(u.end_at)}
                                 {u.reason ? ` | ${u.reason}` : ""}
-                                {u.kind === "recurring" ? (u.isSkippedThisWeek ? " (weekly, skipped this week)" : " (weekly)") : " (one-off)"}
+                                {u.kind === "recurring"
+                                  ? u.isSkippedThisWeek
+                                    ? " (weekly, skipped this week)"
+                                    : " (weekly)"
+                                  : " (one-off)"}
                               </div>
                             ))}
                             {dayUnav.length > 2 && <div style={{ color: "#777" }}>+{dayUnav.length - 2} more…</div>}
@@ -903,7 +1015,12 @@ export default function RosterWeek() {
                               </div>
                               <div style={{ marginBottom: 6 }}>
                                 Reason:{" "}
-                                <input value={unReason} onChange={(e) => setUnReason(e.target.value)} style={{ width: 160 }} placeholder="optional" />
+                                <input
+                                  value={unReason}
+                                  onChange={(e) => setUnReason(e.target.value)}
+                                  style={{ width: 160 }}
+                                  placeholder="optional"
+                                />
                               </div>
 
                               <button onClick={() => saveAddUnavailRecurring(sid, dayIdx)} style={{ marginRight: 6 }}>

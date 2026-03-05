@@ -202,11 +202,7 @@ export default function StaffClockPage() {
         <Link href="/staff/home">
           <button>Back to Home</button>
         </Link>
-        <button onClick={refresh} disabled={loading || !canUseClock}>
-          Refresh <Link href="/staff/clock-history">
-                    <button>My Clock History</button>
-                  </Link>
-        </button>
+
       </div>
 
       <hr style={{ margin: "16px 0" }} />

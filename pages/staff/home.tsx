@@ -168,9 +168,9 @@ export default function StaffHomePage() {
             }}
           >
             <CardButton title="Time Clock" desc="Clock in / clock out" href="/staff/clock" />
-            <CardButton title="My Clock History" desc="Check my own records" href="/staff/clock-history" />
             <CardButton title="Daily Entry" desc="Enter daily numbers" href="/staff/daily-entry" />
-            <CardButton title="My Details" desc="Update my personal details" href="/staff/my-details" />
+            <CardButton title="My Clock History" desc="Check my own records" href="/staff/clock-history" />
+            <CardButton title="My Roster" desc="Check my shifts" href="/staff/my-roster" />
           </div>
         </div>
 
@@ -194,7 +194,7 @@ export default function StaffHomePage() {
 
               <CardButton
                 title="Roster (Week)"
-                desc="Weekly roster view"
+                desc="Weekly roster view and edit"
                 href="/manager/roster-week"
               />
 
@@ -226,6 +226,19 @@ export default function StaffHomePage() {
                 gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
               }}
             >
+              {/* ✅ Dashboard: keep your existing page path here */}
+              <CardButton
+                title="Dashboard"
+                desc="Business overview"
+                href="/owner/dashboard"
+              />
+              
+              <CardButton
+                title="Staff Summary"
+                desc="Hours & pay summary"
+                href="/owner/staff-summary"
+              />
+              
               <CardButton
                 title="Platform"
                 desc="Manage platforms / commission settings"
@@ -238,18 +251,6 @@ export default function StaffHomePage() {
                 href="/manager/pay-rates"
               />
 
-              <CardButton
-                title="Staff Summary"
-                desc="Hours & pay summary (Owner only)"
-                href="/owner/staff-summary"
-              />
-
-              {/* ✅ Dashboard: keep your existing page path here */}
-              <CardButton
-                title="Dashboard"
-                desc="Business overview (Owner only)"
-                href="/owner/dashboard"
-              />
             </div>
           </div>
         )}
