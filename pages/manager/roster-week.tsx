@@ -9,7 +9,7 @@ type ShiftCostRow = {
   staff_id: string;
   shift_start: string;
   shift_end: string;
-  break_minutes: number;
+  break_minutes: number; // keep (DB has it), but we do not show/use it
   hours_worked: number;
   applied_rate: number | null;
   estimated_wage: number | null;
@@ -62,22 +62,34 @@ function toISODate(d: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function isoToLocalInput(iso: string) {
-  const d = new Date(iso);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+function getThisWeekThuISO() {
+  const now = new Date();
+  const dow = now.getDay();
+  const diffToThu = (dow - 4 + 7) % 7;
+  const thu = new Date(now);
+  thu.setHours(0, 0, 0, 0);
+  thu.setDate(now.getDate() - diffToThu);
+  return toISODate(thu);
 }
 
-function localInputToISO(localVal: string) {
-  return new Date(localVal).toISOString();
+function addDaysISO(iso: string, days: number) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return toISODate(d);
+}
+
+function weekRangeText(weekStartISO: string) {
+  const start = new Date(weekStartISO + "T00:00:00");
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const fmt = (d: Date) =>
+    d.toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+  return `${fmt(start)} → ${fmt(end)}`;
 }
 
 function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // ✅ 24-hour display
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function dayIndexFromISO(iso: string) {
@@ -96,16 +108,31 @@ function overlaps(aStartISO: string, aEndISO: string, bStartISO: string, bEndISO
 }
 
 function hhmmss_to_hhmm(t: string) {
-  return (t || "").slice(0, 5); // "17:00:00" -> "17:00"
+  return (t || "").slice(0, 5);
 }
 function hhmm_to_hhmmss(t: string) {
   if (!t) return "00:00:00";
   return t.length === 5 ? `${t}:00` : t;
 }
 
-// ✅ NEW: format date for header (e.g. "05 Mar")
 function fmtHeaderDate(d: Date) {
   return d.toLocaleDateString([], { day: "2-digit", month: "short" });
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function toTimeInputHHMM(iso: string) {
+  const d = new Date(iso);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function buildISOFromDayAndTime(dayDate: Date, hhmm: string) {
+  const [hh, mm] = (hhmm || "00:00").split(":").map((x) => Number(x));
+  const d = new Date(dayDate);
+  d.setHours(hh, mm, 0, 0);
+  return d.toISOString();
 }
 
 export default function RosterWeek() {
@@ -127,7 +154,6 @@ export default function RosterWeek() {
     return { start, end };
   }, [weekStart]);
 
-  // ✅ NEW: 7 dates for table header (Thu..Wed)
   const dayDates = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => {
       const d = new Date(range.start);
@@ -143,23 +169,23 @@ export default function RosterWeek() {
   const [recRules, setRecRules] = useState<UnavailRecurringRule[]>([]);
   const [recOverrides, setRecOverrides] = useState<RecurringOverride[]>([]);
   const [msg, setMsg] = useState("");
+
   const [isPublished, setIsPublished] = useState<boolean>(false);
   const [pubLoading, setPubLoading] = useState<boolean>(false);
 
-  // edit shift
-  const [editingShiftId, setEditingShiftId] = useState<number | null>(null);
-  const [editStart, setEditStart] = useState("");
-  const [editEnd, setEditEnd] = useState("");
-  const [editBreak, setEditBreak] = useState("0");
+  // ===== Drawer (Deputy style) =====
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<"shift" | "unavail">("shift"); // ✅ Shift / Unavailable
+  const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
+  const [drawerStaffId, setDrawerStaffId] = useState<string>("");
+  const [drawerDayIdx, setDrawerDayIdx] = useState<number>(0); // 0..6 Thu..Wed
+  const [drawerShiftId, setDrawerShiftId] = useState<number | null>(null);
 
-  // add shift
-  const [addingKey, setAddingKey] = useState<string | null>(null);
-  const [addStart, setAddStart] = useState("");
-  const [addEnd, setAddEnd] = useState("");
-  const [addBreak, setAddBreak] = useState("0");
+  // Shift inputs (24h)
+  const [drawerStartTime, setDrawerStartTime] = useState<string>("17:00");
+  const [drawerEndTime, setDrawerEndTime] = useState<string>("21:00");
 
-  // add weekly unavailable rule
-  const [addingUnKey, setAddingUnKey] = useState<string | null>(null);
+  // Unavailable inputs (weekly rule)
   const [unStartTime, setUnStartTime] = useState("17:00");
   const [unEndTime, setUnEndTime] = useState("21:00");
   const [unReason, setUnReason] = useState("");
@@ -276,7 +302,6 @@ export default function RosterWeek() {
       .eq("week_start", weekStart)
       .maybeSingle();
 
-    // if no row, treat as draft
     if (r.error) {
       console.log(r.error);
       setIsPublished(false);
@@ -372,11 +397,8 @@ export default function RosterWeek() {
   }, [rows, staffIds]);
 
   // overrides set for fast lookup
-  const skippedRuleIds = useMemo(() => {
-    return new Set<number>(recOverrides.map((x) => x.rule_id));
-  }, [recOverrides]);
+  const skippedRuleIds = useMemo(() => new Set<number>(recOverrides.map((x) => x.rule_id)), [recOverrides]);
 
-  // convert our cell dayIdx(Thu..Wed) -> JS getDay(Thu=4..)
   function cellDayIdxToJsDow(dayIdx: number) {
     return [4, 5, 6, 0, 1, 2, 3][dayIdx];
   }
@@ -409,7 +431,7 @@ export default function RosterWeek() {
 
         occ.push({
           kind: "recurring",
-          id: rule.id, // rule id
+          id: rule.id,
           staff_id: rule.staff_id,
           store_id: rule.store_id,
           start_at: start.toISOString(),
@@ -437,7 +459,7 @@ export default function RosterWeek() {
     return [...one, ...recurringOccurrences];
   }, [oneOff, recurringOccurrences]);
 
-  // unavailability grid for display (we still show skipped rules, but they should NOT block)
+  // unavailability grid for display
   const unavGrid = useMemo(() => {
     const g: Record<string, UnavailOccurrence[][]> = {};
     staffIds.forEach((sid) => (g[sid] = Array.from({ length: 7 }, () => [])));
@@ -461,7 +483,6 @@ export default function RosterWeek() {
     return g;
   }, [allUnavail, staffIds, range.start]);
 
-  // totals
   const storeTotalHours = rows.reduce((sum, r) => sum + r.hours_worked, 0);
   const storeTotalWage = rows.reduce((sum, r) => sum + (r.estimated_wage ?? 0), 0);
 
@@ -475,81 +496,82 @@ export default function RosterWeek() {
     return totals;
   }, [rows]);
 
-  // ===== shift editing =====
-  function startEdit(r: ShiftCostRow) {
-    setEditingShiftId(r.shift_id);
-    setEditStart(isoToLocalInput(r.shift_start));
-    setEditEnd(isoToLocalInput(r.shift_end));
-    setEditBreak(String(r.break_minutes ?? 0));
+  // ===== Drawer open/close =====
+  function closeDrawer() {
+    setDrawerOpen(false);
+  }
+
+  // ✅ click empty cell => open drawer default add shift
+  function openDrawerFromCell(staffId: string, dayIdx: number) {
+    setDrawerStaffId(staffId);
+    setDrawerDayIdx(dayIdx);
+
+    setDrawerTab("shift");
+    setDrawerMode("add");
+    setDrawerShiftId(null);
+    setDrawerStartTime("17:00");
+    setDrawerEndTime("21:00");
+
+    // default unavailable form values
+    setUnStartTime("17:00");
+    setUnEndTime("21:00");
+    setUnReason("");
+
+    setDrawerOpen(true);
     setMsg("");
   }
 
-  function cancelEdit() {
-    setEditingShiftId(null);
-    setEditStart("");
-    setEditEnd("");
-    setEditBreak("0");
-  }
+  // click shift card => edit shift
+  function openDrawerForEditShift(r: ShiftCostRow) {
+    const dayIdx = dayIndexFromISO(r.shift_start);
 
-  async function saveEdit() {
-    if (!editingShiftId) return;
-    if (!editStart || !editEnd) {
-      setMsg("❌ Please fill start and end.");
-      return;
-    }
+    setDrawerStaffId(r.staff_id);
+    setDrawerDayIdx(dayIdx);
 
-    const payload: any = {
-      shift_start: localInputToISO(editStart),
-      shift_end: localInputToISO(editEnd),
-      break_minutes: Number(editBreak || "0"),
-    };
+    setDrawerTab("shift");
+    setDrawerMode("edit");
+    setDrawerShiftId(r.shift_id);
+    setDrawerStartTime(toTimeInputHHMM(r.shift_start));
+    setDrawerEndTime(toTimeInputHHMM(r.shift_end));
 
-    const u = await supabase.from("shifts").update(payload).eq("id", editingShiftId);
-    if (u.error) {
-      setMsg("❌ Update failed: " + u.error.message);
-      return;
-    }
+    // keep unavailable form values
+    setUnStartTime("17:00");
+    setUnEndTime("21:00");
+    setUnReason("");
 
-    setMsg("✅ Updated!");
-    cancelEdit();
-    await loadShiftCosts();
-  }
-
-  async function deleteShift(shiftId: number) {
-    if (!confirm("Delete this shift?")) return;
-    const d = await supabase.from("shifts").delete().eq("id", shiftId);
-    if (d.error) {
-      setMsg("❌ Delete failed: " + d.error.message);
-      return;
-    }
-    setMsg("✅ Deleted!");
-    await loadShiftCosts();
-  }
-
-  // ===== add shift =====
-  function openAdd(staffId: string, dayIdx: number) {
-    setAddingKey(`${staffId}-${dayIdx}`);
-    setAddBreak("0");
-
-    const base = new Date(range.start);
-    base.setDate(base.getDate() + dayIdx);
-    base.setHours(17, 0, 0, 0);
-    const end = new Date(base);
-    end.setHours(21, 0, 0, 0);
-
-    setAddStart(isoToLocalInput(base.toISOString()));
-    setAddEnd(isoToLocalInput(end.toISOString()));
+    setDrawerOpen(true);
     setMsg("");
   }
 
-  function closeAdd() {
-    setAddingKey(null);
-    setAddStart("");
-    setAddEnd("");
-    setAddBreak("0");
+  // click unavailable summary => open drawer on unavailable tab
+  function openDrawerForUnavailable(staffId: string, dayIdx: number) {
+    setDrawerStaffId(staffId);
+    setDrawerDayIdx(dayIdx);
+
+    setDrawerTab("unavail");
+    setDrawerMode("add"); // irrelevant in unavail tab
+    setDrawerShiftId(null);
+
+    setUnStartTime("17:00");
+    setUnEndTime("21:00");
+    setUnReason("");
+
+    setDrawerOpen(true);
+    setMsg("");
   }
 
-  // warning only: show if overlaps active unavailable (skipped weekly rules do NOT count)
+  // ===== Drawer data for selected staff/day =====
+  const drawerDayDate = useMemo(() => dayDates[drawerDayIdx], [dayDates, drawerDayIdx]);
+
+  const drawerDayUnav = useMemo(() => {
+    if (!drawerStaffId) return [];
+    return (unavGrid[drawerStaffId]?.[drawerDayIdx] ?? []) as UnavailOccurrence[];
+  }, [unavGrid, drawerStaffId, drawerDayIdx]);
+
+  const drawerRecRulesInCell = useMemo(() => drawerDayUnav.filter((x) => x.kind === "recurring"), [drawerDayUnav]);
+  const drawerOneOffInCell = useMemo(() => drawerDayUnav.filter((x) => x.kind === "oneoff"), [drawerDayUnav]);
+
+  // ===== shift save/delete =====
   function warnIfUnavailable(staffId: string, startISO: string, endISO: string) {
     const list = allUnavail.filter((u) => u.staff_id === staffId && u.store_id === storeId);
 
@@ -564,74 +586,115 @@ export default function RosterWeek() {
     }
   }
 
-  async function saveAdd(staffId: string) {
-    if (!addStart || !addEnd) {
-      setMsg("❌ Please fill start and end.");
+  async function saveShiftFromDrawer() {
+    setMsg("");
+
+    if (!drawerStaffId) {
+      setMsg("❌ Missing staff.");
+      return;
+    }
+    if (!drawerDayDate) {
+      setMsg("❌ Missing day.");
+      return;
+    }
+    if (!drawerStartTime || !drawerEndTime) {
+      setMsg("❌ Please fill start and end time.");
       return;
     }
 
-    const startISO = localInputToISO(addStart);
-    const endISO = localInputToISO(addEnd);
+    const startISO = buildISOFromDayAndTime(drawerDayDate, drawerStartTime);
+    let endISO = buildISOFromDayAndTime(drawerDayDate, drawerEndTime);
 
     if (new Date(endISO).getTime() <= new Date(startISO).getTime()) {
-      setMsg("❌ End must be after Start.");
-      return;
+      const end = new Date(endISO);
+      end.setDate(end.getDate() + 1);
+      endISO = end.toISOString();
     }
 
-    warnIfUnavailable(staffId, startISO, endISO);
+    warnIfUnavailable(drawerStaffId, startISO, endISO);
 
     const { data: userData } = await supabase.auth.getUser();
     const uid = userData.user?.id ?? null;
 
-    const ins = await supabase.from("shifts").insert(
-      [
-        {
-          store_id: storeId,
-          staff_id: staffId,
-          shift_start: startISO,
-          shift_end: endISO,
-          break_minutes: Number(addBreak || "0"),
-          created_by: uid,
-        },
-      ],
-      { returning: "minimal" } as any
-    );
+    if (drawerMode === "add") {
+      const ins = await supabase.from("shifts").insert(
+        [
+          {
+            store_id: storeId,
+            staff_id: drawerStaffId,
+            shift_start: startISO,
+            shift_end: endISO,
+            break_minutes: 0, // ✅ paid break
+            created_by: uid,
+          },
+        ],
+        { returning: "minimal" } as any
+      );
 
-    if (ins.error) {
-      setMsg("❌ Add failed: " + ins.error.message);
+      if (ins.error) {
+        setMsg("❌ Add failed: " + ins.error.message);
+        return;
+      }
+
+      setMsg((prev) => (prev.startsWith("⚠️") ? prev + " ✅ Shift added." : "✅ Added!"));
+      closeDrawer();
+      await loadShiftCosts();
       return;
     }
 
-    setMsg((prev) => (prev.startsWith("⚠️") ? prev + " ✅ Shift added." : "✅ Added!"));
-    closeAdd();
+    if (!drawerShiftId) {
+      setMsg("❌ Missing shift id.");
+      return;
+    }
+
+    const up = await supabase
+      .from("shifts")
+      .update({
+        shift_start: startISO,
+        shift_end: endISO,
+        break_minutes: 0, // ✅ paid break
+      })
+      .eq("id", drawerShiftId);
+
+    if (up.error) {
+      setMsg("❌ Update failed: " + up.error.message);
+      return;
+    }
+
+    setMsg((prev) => (prev.startsWith("⚠️") ? prev + " ✅ Updated." : "✅ Updated!"));
+    closeDrawer();
     await loadShiftCosts();
   }
 
-  // ===== weekly unavailable rules (manager sets for any staff) =====
-  function openAddUnavail(staffId: string, dayIdx: number) {
-    setAddingUnKey(`${staffId}-${dayIdx}`);
-    setUnStartTime("17:00");
-    setUnEndTime("21:00");
-    setUnReason("");
-    setMsg("");
+  async function deleteShiftFromDrawer() {
+    if (!drawerShiftId) return;
+    if (!confirm("Delete this shift?")) return;
+
+    const d = await supabase.from("shifts").delete().eq("id", drawerShiftId);
+    if (d.error) {
+      setMsg("❌ Delete failed: " + d.error.message);
+      return;
+    }
+
+    setMsg("✅ Deleted!");
+    closeDrawer();
+    await loadShiftCosts();
   }
 
-  function closeAddUnavail() {
-    setAddingUnKey(null);
-    setUnStartTime("17:00");
-    setUnEndTime("21:00");
-    setUnReason("");
-  }
-
-  async function saveAddUnavailRecurring(staffId: string, dayIdx: number) {
+  // ===== unavailable: add weekly rule + manage skip/delete =====
+  async function saveAddUnavailRecurringFromDrawer() {
     setMsg("");
 
+    if (!drawerStaffId) {
+      setMsg("❌ Missing staff.");
+      return;
+    }
     if (!unStartTime || !unEndTime) {
       setMsg("❌ Please fill start/end time.");
       return;
     }
 
-    const jsDow = cellDayIdxToJsDow(dayIdx);
+    const jsDow = cellDayIdxToJsDow(drawerDayIdx);
 
     const { data: userData } = await supabase.auth.getUser();
     const uid = userData.user?.id ?? null;
@@ -639,7 +702,7 @@ export default function RosterWeek() {
     const ins = await supabase.from("staff_unavailability_recurring").insert(
       [
         {
-          staff_id: staffId,
+          staff_id: drawerStaffId,
           store_id: storeId,
           day_of_week: jsDow,
           start_time: hhmm_to_hhmmss(unStartTime),
@@ -657,8 +720,9 @@ export default function RosterWeek() {
     }
 
     setMsg("✅ Weekly unavailable rule added (repeats every week).");
-    closeAddUnavail();
+    setUnReason("");
     await loadRecurringRules();
+    await loadRecurringOverrides();
   }
 
   async function deleteRecurringRule(ruleId: number) {
@@ -673,7 +737,6 @@ export default function RosterWeek() {
     await loadRecurringOverrides();
   }
 
-  // ===== one-off override: skip a weekly rule for THIS week only =====
   async function skipRuleThisWeek(ruleId: number) {
     setMsg("");
     const { data: userData } = await supabase.auth.getUser();
@@ -692,7 +755,6 @@ export default function RosterWeek() {
     );
 
     if (ins.error) {
-      // if already exists, show friendly message
       if (ins.error.message.toLowerCase().includes("duplicate") || ins.error.message.toLowerCase().includes("unique")) {
         setMsg("ℹ️ This rule is already skipped for this week.");
         return;
@@ -723,7 +785,7 @@ export default function RosterWeek() {
     await loadRecurringOverrides();
   }
 
-  // ===== payroll export =====
+  // ===== payroll export (buttons moved to bottom) =====
   function downloadCSV(filename: string, csvText: string) {
     const blob = new Blob([csvText], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -761,7 +823,7 @@ export default function RosterWeek() {
   }
 
   function exportPayrollDetail() {
-    const header = "Staff Name,Staff ID,Shift Date,Start,End,Break(min),Hours,Rate,Wage";
+    const header = "Staff Name,Staff ID,Shift Date,Start,End,Hours,Rate,Wage";
     const lines = rows.map((r) => {
       const d = new Date(r.shift_start);
       const shiftDate = d.toLocaleDateString();
@@ -771,7 +833,6 @@ export default function RosterWeek() {
         `"${shiftDate}"`,
         `"${fmtTime(r.shift_start)}"`,
         `"${fmtTime(r.shift_end)}"`,
-        String(r.break_minutes ?? 0),
         r.hours_worked.toFixed(2),
         (r.applied_rate ?? 0).toFixed(2),
         (r.estimated_wage ?? 0).toFixed(2),
@@ -782,30 +843,242 @@ export default function RosterWeek() {
   }
 
   return (
-    <div style={{ padding: 20 }}>
+    <div style={{ padding: 20, position: "relative" }}>
+      {/* Drawer overlay */}
+      {drawerOpen && (
+        <div
+          onClick={closeDrawer}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.25)",
+            zIndex: 999,
+          }}
+        />
+      )}
+
+      {/* Drawer */}
+      <div
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          height: "100vh",
+          width: 380,
+          background: "#fff",
+          borderLeft: "1px solid #ddd",
+          boxShadow: "-8px 0 20px rgba(0,0,0,0.08)",
+          transform: drawerOpen ? "translateX(0)" : "translateX(105%)",
+          transition: "transform 160ms ease",
+          zIndex: 1000,
+          padding: 16,
+          overflowY: "auto",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 900 }}>Edit — {dayLabels[drawerDayIdx]}</div>
+          <button onClick={closeDrawer}>✕</button>
+        </div>
+
+        <div style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>
+          <div>
+            <b>Staff:</b> {drawerStaffId ? staffName(drawerStaffId) : "—"}
+          </div>
+          <div>
+            <b>Date:</b> {drawerDayDate ? fmtHeaderDate(drawerDayDate) : "—"}
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <button
+            onClick={() => setDrawerTab("shift")}
+            style={{
+              fontWeight: 800,
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid #ddd",
+              background: drawerTab === "shift" ? "#f2f2f2" : "#fff",
+            }}
+          >
+            Shift
+          </button>
+          <button
+            onClick={() => setDrawerTab("unavail")}
+            style={{
+              fontWeight: 800,
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid #ddd",
+              background: drawerTab === "unavail" ? "#f2f2f2" : "#fff",
+            }}
+          >
+            Unavailable
+          </button>
+        </div>
+
+        {/* SHIFT TAB */}
+        {drawerTab === "shift" ? (
+          <div>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+              Mode: <b>{drawerMode === "add" ? "ADD" : "EDIT"}</b>
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, marginBottom: 4 }}>Start (24h)</div>
+              <input
+                type="time"
+                value={drawerStartTime}
+                onChange={(e) => setDrawerStartTime(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, marginBottom: 4 }}>End (24h)</div>
+              <input
+                type="time"
+                value={drawerEndTime}
+                onChange={(e) => setDrawerEndTime(e.target.value)}
+                style={{ width: "100%" }}
+              />
+              <div style={{ fontSize: 12, color: "#777", marginTop: 6 }}>
+                Tip: If end time is earlier than start, it will be treated as overnight (next day).
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={saveShiftFromDrawer} style={{ flex: 1, fontWeight: 800 }}>
+                Save
+              </button>
+
+              {drawerMode === "edit" ? (
+                <button onClick={deleteShiftFromDrawer} style={{ fontWeight: 800 }}>
+                  Delete
+                </button>
+              ) : null}
+            </div>
+
+            
+          </div>
+        ) : null}
+
+        {/* UNAVAILABLE TAB */}
+        {drawerTab === "unavail" ? (
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>This day — Unavailability</div>
+
+              {drawerOneOffInCell.length > 0 ? (
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
+                  <b>One-off</b>
+                  {drawerOneOffInCell.slice(0, 4).map((u) => (
+                    <div key={`oneoff-${u.id}`} style={{ marginTop: 4 }}>
+                      {fmtTime(u.start_at)}–{fmtTime(u.end_at)}
+                      {u.reason ? ` | ${u.reason}` : ""} (one-off)
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>No one-off unavailability shown here.</div>
+              )}
+
+              {drawerRecRulesInCell.length > 0 ? (
+                <div style={{ fontSize: 12, color: "#666" }}>
+                  <b>Weekly rules</b>
+                  {drawerRecRulesInCell.map((u) => {
+                    const skipped = !!u.isSkippedThisWeek;
+                    return (
+                      <div
+                        key={`rule-${u.id}`}
+                        style={{
+                          marginTop: 8,
+                          padding: 8,
+                          border: "1px solid #e6e6e6",
+                          borderRadius: 10,
+                          background: "#fafafa",
+                        }}
+                      >
+                        <div style={{ fontWeight: 900, color: skipped ? "#999" : "#333" }}>
+                          {fmtTime(u.start_at)}–{fmtTime(u.end_at)}{" "}
+                          <span style={{ fontWeight: 700, fontSize: 12 }}>{skipped ? "(skipped this week)" : "(weekly)"}</span>
+                        </div>
+                        {u.reason ? <div style={{ marginTop: 2, color: "#666" }}>Reason: {u.reason}</div> : null}
+
+                        <div style={{ marginTop: 8 }}>
+                          {!skipped ? (
+                            <button onClick={() => skipRuleThisWeek(u.id)} style={{ marginRight: 8 }}>
+                              Skip this week
+                            </button>
+                          ) : (
+                            <button onClick={() => undoSkipRuleThisWeek(u.id)} style={{ marginRight: 8 }}>
+                              Undo skip
+                            </button>
+                          )}
+                          <button onClick={() => deleteRecurringRule(u.id)}>Delete rule</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#999" }}>No weekly rule on this day yet.</div>
+              )}
+            </div>
+
+            <hr />
+
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Add Unavailable (Weekly repeating)</div>
+
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 12, marginBottom: 4 }}>Start (24h)</div>
+                <input type="time" value={unStartTime} onChange={(e) => setUnStartTime(e.target.value)} style={{ width: "100%" }} />
+              </div>
+
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 12, marginBottom: 4 }}>End (24h)</div>
+                <input type="time" value={unEndTime} onChange={(e) => setUnEndTime(e.target.value)} style={{ width: "100%" }} />
+              </div>
+
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, marginBottom: 4 }}>Reason (optional)</div>
+                <input value={unReason} onChange={(e) => setUnReason(e.target.value)} style={{ width: "100%" }} />
+              </div>
+
+              <button onClick={saveAddUnavailRecurringFromDrawer} style={{ fontWeight: 800 }}>
+                Save weekly unavailable
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Page header */}
       <div style={{ marginBottom: 12 }}>
         <button onClick={() => (window.location.href = "/staff/home")}>← Back to Home</button>
       </div>
       <h1>Roster — Weekly (Thu → Wed)</h1>
 
       <div style={{ marginBottom: 10 }}>
-        Week Start (THU):{" "}
-        <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} />
+        Week (Thu→Wed):{" "}
+        <button onClick={() => setWeekStart((w) => addDaysISO(w, -7))}>← Prev Week</button>
+        <button onClick={() => setWeekStart(getThisWeekThuISO())} style={{ marginLeft: 8 }}>
+          This Week
+        </button>
+        <button onClick={() => setWeekStart((w) => addDaysISO(w, 7))} style={{ marginLeft: 8 }}>
+          Next Week →
+        </button>
+
+        <input type="date" value={weekStart} readOnly style={{ marginLeft: 8 }} />
+
+        <span style={{ marginLeft: 12, color: "#666", fontWeight: 700 }}>{weekRangeText(weekStart)}</span>
+
         <button onClick={loadAll} style={{ marginLeft: 8 }}>
           Refresh
         </button>
 
-        <button onClick={exportPayrollSummary} style={{ marginLeft: 8 }}>
-          Export Payroll (Summary CSV)
-        </button>
-
-        <button onClick={exportPayrollDetail} style={{ marginLeft: 8 }}>
-          Export Payroll (Detail CSV)
-        </button>
-
-        <span style={{ marginLeft: 12, fontWeight: 800 }}>
-          Status: {isPublished ? "PUBLISHED" : "DRAFT"}
-        </span>
+        <span style={{ marginLeft: 12, fontWeight: 800 }}>Status: {isPublished ? "PUBLISHED" : "DRAFT"}</span>
 
         {!isPublished ? (
           <button onClick={publishWeek} style={{ marginLeft: 8 }} disabled={pubLoading}>
@@ -821,21 +1094,14 @@ export default function RosterWeek() {
       {msg && <div style={{ marginBottom: 10 }}>{msg}</div>}
 
       <div style={{ overflowX: "auto" }}>
-        <table cellPadding={8} style={{ borderCollapse: "collapse", minWidth: 1750 }}>
+        <table style={{ borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              <th style={{ border: "1px solid #ccc", position: "sticky", left: 0, background: "#fff" }}>
-                NAME
-              </th>
+              <th style={{ border: "1px solid #ccc", position: "sticky", left: 0, background: "#fff" }}>NAME</th>
               {dayLabels.map((d, i) => (
                 <th key={d} style={{ border: "1px solid #ccc" }}>
                   <div style={{ fontWeight: 800 }}>{d}</div>
-
-                  {/* ✅ NEW: show the actual date under MON/TUE... */}
-                  <div style={{ fontSize: 12, color: "#444", marginTop: 2 }}>
-                    {fmtHeaderDate(dayDates[i])}
-                  </div>
-
+                  <div style={{ fontSize: 12, color: "#444", marginTop: 2 }}>{fmtHeaderDate(dayDates[i])}</div>
                   <div style={{ fontSize: 12, color: "#666" }}>
                     Day total: {dailyTotals[i].hours.toFixed(2)}h | ${dailyTotals[i].wage.toFixed(2)}
                   </div>
@@ -870,37 +1136,45 @@ export default function RosterWeek() {
                   </td>
 
                   {cells.map((cell, dayIdx) => {
-                    const key = `${sid}-${dayIdx}`;
-                    const isAddingHere = addingKey === key;
-
-                    const unKey = `${sid}-${dayIdx}`;
-                    const isAddingUnHere = addingUnKey === unKey;
-
                     const dayUnav = uCells[dayIdx] ?? [];
 
-                    // active unavailable exists if:
-                    // - oneoff always active
-                    // - recurring active only if NOT skipped
                     const hasActiveUnav =
                       dayUnav.some((u) => u.kind === "oneoff") ||
                       dayUnav.some((u) => u.kind === "recurring" && !u.isSkippedThisWeek);
 
-                    // recurring rules in this cell (for skip / delete)
                     const recInCell = dayUnav.filter((x) => x.kind === "recurring");
 
                     return (
                       <td
                         key={dayIdx}
+                        onClick={() => openDrawerFromCell(sid, dayIdx)} // ✅ click empty space opens drawer (default Add Shift)
                         style={{
                           border: "1px solid #ccc",
                           verticalAlign: "top",
-                          minWidth: 210,
+                          minWidth: 170, // narrower columns
                           background: hasActiveUnav ? "#ffeaea" : "#fff",
+                          cursor: "pointer",
                         }}
+                        title="Click to add shift / manage unavailable"
                       >
-                        {/* Unavailable info */}
+                        {/* Unavailable info (click => open drawer on unavailable tab) */}
                         {dayUnav.length > 0 && (
-                          <div style={{ fontSize: 12, marginBottom: 6 }}>
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openDrawerForUnavailable(sid, dayIdx);
+                            }}
+                            style={{
+                              fontSize: 12,
+                              marginBottom: 6,
+                              padding: "6px 8px",
+                              border: "1px solid #eee",
+                              borderRadius: 10,
+                              background: "#fff",
+                              cursor: "pointer",
+                            }}
+                            title="Click to manage unavailable"
+                          >
                             <b>Unavailable</b>
                             {dayUnav.slice(0, 2).map((u) => (
                               <div
@@ -911,153 +1185,45 @@ export default function RosterWeek() {
                                 {u.reason ? ` | ${u.reason}` : ""}
                                 {u.kind === "recurring"
                                   ? u.isSkippedThisWeek
-                                    ? " (weekly, skipped this week)"
+                                    ? " (weekly, skipped)"
                                     : " (weekly)"
                                   : " (one-off)"}
                               </div>
                             ))}
                             {dayUnav.length > 2 && <div style={{ color: "#777" }}>+{dayUnav.length - 2} more…</div>}
+                            {recInCell.length > 0 ? <div style={{ color: "#777", marginTop: 4 }}>Click to Skip/Undo/Delete</div> : null}
                           </div>
                         )}
 
-                        {/* Shifts */}
+                        {/* Shifts (Card style) */}
                         {cell.length === 0 ? <div style={{ color: "#999" }}>—</div> : null}
 
-                        {cell.map((r) => {
-                          const isEditing = editingShiftId === r.shift_id;
-
-                          return (
-                            <div key={r.shift_id} style={{ marginBottom: 10, paddingBottom: 8, borderBottom: "1px dashed #ddd" }}>
-                              {!isEditing ? (
-                                <>
-                                  <div style={{ fontWeight: 800 }}>
-                                    {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
-                                  </div>
-                                  <div style={{ fontSize: 12, color: "#666" }}>
-                                    Break {r.break_minutes ?? 0}m | {r.hours_worked.toFixed(2)}h
-                                  </div>
-                                  <div style={{ fontSize: 12, color: "#666" }}>
-                                    Rate ${(r.applied_rate ?? 0).toFixed(2)} | Wage ${(r.estimated_wage ?? 0).toFixed(2)}
-                                  </div>
-                                  <div style={{ marginTop: 6 }}>
-                                    <button onClick={() => startEdit(r)} style={{ marginRight: 6 }}>
-                                      Edit
-                                    </button>
-                                    <button onClick={() => deleteShift(r.shift_id)}>Delete</button>
-                                  </div>
-                                </>
-                              ) : (
-                                <>
-                                  <div style={{ fontSize: 12, marginBottom: 6 }}>Edit shift</div>
-                                  <div style={{ marginBottom: 6 }}>
-                                    Start:{" "}
-                                    <input type="datetime-local" value={editStart} onChange={(e) => setEditStart(e.target.value)} />
-                                  </div>
-                                  <div style={{ marginBottom: 6 }}>
-                                    End:{" "}
-                                    <input type="datetime-local" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} />
-                                  </div>
-                                  <div style={{ marginBottom: 6 }}>
-                                    Break(min):{" "}
-                                    <input value={editBreak} onChange={(e) => setEditBreak(e.target.value)} style={{ width: 80 }} />
-                                  </div>
-
-                                  <button onClick={saveEdit} style={{ marginRight: 6 }}>
-                                    Save
-                                  </button>
-                                  <button onClick={cancelEdit}>Cancel</button>
-                                </>
-                              )}
+                        {cell.map((r) => (
+                          <div
+                            key={r.shift_id}
+                            onClick={(e) => {
+                              e.stopPropagation(); // ✅ prevent cell click (add) from firing
+                              openDrawerForEditShift(r);
+                            }}
+                            style={{
+                              cursor: "pointer",
+                              marginBottom: 8,
+                              padding: "8px 10px",
+                              border: "1px solid #e6e6e6",
+                              borderRadius: 10,
+                              background: "#fafafa",
+                            }}
+                            title="Click to edit shift"
+                          >
+                            <div style={{ fontWeight: 900 }}>
+                              {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
                             </div>
-                          );
-                        })}
-
-                        {/* Add shift */}
-                        {!isAddingHere ? (
-                          <button onClick={() => openAdd(sid, dayIdx)}>+ Add Shift</button>
-                        ) : (
-                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee" }}>
-                            <div style={{ fontSize: 12, marginBottom: 6 }}>Add shift</div>
-                            <div style={{ marginBottom: 6 }}>
-                              Start:{" "}
-                              <input type="datetime-local" value={addStart} onChange={(e) => setAddStart(e.target.value)} />
+                            <div style={{ fontSize: 12, color: "#666", marginTop: 2 }}>{r.hours_worked.toFixed(2)}h</div>
+                            <div style={{ fontSize: 12, color: "#666" }}>
+                              Rate ${(r.applied_rate ?? 0).toFixed(2)} | Wage ${(r.estimated_wage ?? 0).toFixed(2)}
                             </div>
-                            <div style={{ marginBottom: 6 }}>
-                              End:{" "}
-                              <input type="datetime-local" value={addEnd} onChange={(e) => setAddEnd(e.target.value)} />
-                            </div>
-                            <div style={{ marginBottom: 6 }}>
-                              Break(min):{" "}
-                              <input value={addBreak} onChange={(e) => setAddBreak(e.target.value)} style={{ width: 80 }} />
-                            </div>
-
-                            <button onClick={() => saveAdd(sid)} style={{ marginRight: 6 }}>
-                              Save
-                            </button>
-                            <button onClick={closeAdd}>Cancel</button>
                           </div>
-                        )}
-
-                        {/* Add weekly unavailable */}
-                        <div style={{ marginTop: 10 }}>
-                          {!isAddingUnHere ? (
-                            <button onClick={() => openAddUnavail(sid, dayIdx)}>+ Add Unavailable (Weekly)</button>
-                          ) : (
-                            <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee" }}>
-                              <div style={{ fontSize: 12, marginBottom: 6 }}>Add unavailable (weekly repeating)</div>
-                              <div style={{ marginBottom: 6 }}>
-                                Start time:{" "}
-                                <input type="time" value={unStartTime} onChange={(e) => setUnStartTime(e.target.value)} />
-                              </div>
-                              <div style={{ marginBottom: 6 }}>
-                                End time:{" "}
-                                <input type="time" value={unEndTime} onChange={(e) => setUnEndTime(e.target.value)} />
-                              </div>
-                              <div style={{ marginBottom: 6 }}>
-                                Reason:{" "}
-                                <input
-                                  value={unReason}
-                                  onChange={(e) => setUnReason(e.target.value)}
-                                  style={{ width: 160 }}
-                                  placeholder="optional"
-                                />
-                              </div>
-
-                              <button onClick={() => saveAddUnavailRecurring(sid, dayIdx)} style={{ marginRight: 6 }}>
-                                Save
-                              </button>
-                              <button onClick={closeAddUnavail}>Cancel</button>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Weekly rule controls inside this day */}
-                        {recInCell.length > 0 && (
-                          <div style={{ marginTop: 10, fontSize: 12 }}>
-                            <b>Weekly rules (this day)</b>
-                            {recInCell.slice(0, 3).map((u) => {
-                              const skipped = !!u.isSkippedThisWeek;
-                              return (
-                                <div key={`rule-${u.id}`} style={{ marginTop: 6 }}>
-                                  {fmtTime(u.start_at)}–{fmtTime(u.end_at)}{" "}
-                                  {!skipped ? (
-                                    <button onClick={() => skipRuleThisWeek(u.id)} style={{ marginLeft: 6 }}>
-                                      Skip this week
-                                    </button>
-                                  ) : (
-                                    <button onClick={() => undoSkipRuleThisWeek(u.id)} style={{ marginLeft: 6 }}>
-                                      Undo skip
-                                    </button>
-                                  )}
-                                  <button onClick={() => deleteRecurringRule(u.id)} style={{ marginLeft: 6 }}>
-                                    Delete rule
-                                  </button>
-                                </div>
-                              );
-                            })}
-                            {recInCell.length > 3 && <div style={{ color: "#777" }}>+ more…</div>}
-                          </div>
-                        )}
+                        ))}
                       </td>
                     );
                   })}
@@ -1076,12 +1242,24 @@ export default function RosterWeek() {
       <div>Total Hours: {storeTotalHours.toFixed(2)}</div>
       <div>Total Wage: ${storeTotalWage.toFixed(2)}</div>
 
+      {/* Export buttons at bottom */}
+      <div style={{ marginTop: 14 }}>
+        <b>Payroll Export</b>
+        <div style={{ marginTop: 8 }}>
+          <button onClick={exportPayrollSummary} style={{ marginRight: 8 }}>
+            Export Payroll (Summary CSV)
+          </button>
+          <button onClick={exportPayrollDetail}>Export Payroll (Detail CSV)</button>
+        </div>
+      </div>
+
       <div style={{ marginTop: 12, color: "#666" }}>
         Notes:
         <ul>
-          <li>Light red cells mean the staff has an active unavailable time on that day.</li>
-          <li>"Skip this week" makes a weekly unavailable rule NOT apply for this week only.</li>
-          <li>Day totals are shown under each day header to help balance staffing.</li>
+          <li>Click empty cell space → opens Drawer (default Add Shift).</li>
+          <li>Click a shift card → opens Drawer to edit that shift.</li>
+          <li>Click the Unavailable box → opens Drawer (Unavailable tab) to add/skip/undo/delete weekly rules.</li>
+          <li>Break is paid → not used (always 0).</li>
         </ul>
       </div>
     </div>

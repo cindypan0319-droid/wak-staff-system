@@ -7,7 +7,7 @@ type ShiftRow = {
   staff_id: string;
   shift_start: string;
   shift_end: string;
-  break_minutes: number;
+  break_minutes: number; // keep (DB has it), but we do not show/use it
   week_start: string | null;
 };
 
@@ -19,23 +19,57 @@ function toISODate(d: Date) {
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
+
+function addDaysISO(iso: string, days: number) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return toISODate(d);
+}
+
+function weekRangeText(weekStartISO: string) {
+  const start = new Date(weekStartISO + "T00:00:00");
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const fmt = (d: Date) =>
+    d.toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+  return `${fmt(start)} → ${fmt(end)}`;
+}
+
 function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // ✅ 24-hour
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
+
 function fmtHeaderDate(d: Date) {
-  return d.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" });
+  return d.toLocaleDateString([], { day: "2-digit", month: "short" });
 }
+
 function dayIndexFromISO(iso: string) {
   const d = new Date(iso);
   const dow = d.getDay(); // 0 Sun ... 4 Thu
   const map: Record<number, number> = { 4: 0, 5: 1, 6: 2, 0: 3, 1: 4, 2: 5, 3: 6 };
   return map[dow];
 }
-function hoursBetween(startISO: string, endISO: string, breakMin: number) {
+
+// ✅ paid break: do NOT subtract break minutes
+function hoursBetween(startISO: string, endISO: string) {
   const ms = new Date(endISO).getTime() - new Date(startISO).getTime();
   const hrs = ms / 3600000;
-  return Math.max(0, hrs - (Number(breakMin || 0) / 60));
+  return Math.max(0, hrs);
 }
+
+function getThisWeekThuISO() {
+  const now = new Date();
+  const dow = now.getDay();
+  const diffToThu = (dow - 4 + 7) % 7;
+
+  const thisThu = new Date(now);
+  thisThu.setHours(0, 0, 0, 0);
+  thisThu.setDate(now.getDate() - diffToThu);
+
+  return toISODate(thisThu);
+}
+
 function getNextWeekThuISO() {
   const now = new Date();
   const dow = now.getDay();
@@ -52,7 +86,7 @@ export default function MyRosterNextWeek() {
   const [storeId] = useState("MOOROOLBARK");
   const [uid, setUid] = useState<string | null>(null);
 
-  const [weekStart, setWeekStart] = useState(() => getNextWeekThuISO());
+  const [weekStart, setWeekStart] = useState(() => getThisWeekThuISO());
 
   const range = useMemo(() => {
     const start = new Date(weekStart + "T00:00:00");
@@ -113,7 +147,6 @@ export default function MyRosterNextWeek() {
       return;
     }
 
-    // ✅ read shifts directly (RLS will enforce published + own only)
     const r = await supabase
       .from("shifts")
       .select("id, store_id, staff_id, shift_start, shift_end, break_minutes, week_start")
@@ -156,7 +189,7 @@ export default function MyRosterNextWeek() {
     const totals = Array.from({ length: 7 }, () => ({ hours: 0 }));
     for (const r of rows) {
       const idx = dayIndexFromISO(r.shift_start);
-      totals[idx].hours += hoursBetween(r.shift_start, r.shift_end, r.break_minutes);
+      totals[idx].hours += hoursBetween(r.shift_start, r.shift_end);
     }
     return totals;
   }, [rows]);
@@ -172,15 +205,24 @@ export default function MyRosterNextWeek() {
       <h1>My Roster — Next Week (Thu → Wed)</h1>
 
       <div style={{ marginBottom: 10 }}>
-        Week Start (THU):{" "}
-        <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} />
+        Week (Thu→Wed):{" "}
+        <button onClick={() => setWeekStart((w) => addDaysISO(w, -7))}>← Prev Week</button>
+        <button onClick={() => setWeekStart(getThisWeekThuISO())} style={{ marginLeft: 8 }}>
+          This Week
+        </button>
+        <button onClick={() => setWeekStart((w) => addDaysISO(w, 7))} style={{ marginLeft: 8 }}>
+          Next →
+        </button>
+
+        <input type="date" value={weekStart} readOnly style={{ marginLeft: 8 }} />
+
+        <span style={{ marginLeft: 12, color: "#666", fontWeight: 700 }}>{weekRangeText(weekStart)}</span>
+
         <button onClick={loadMyShifts} style={{ marginLeft: 8 }}>
           Refresh
         </button>
 
-        <span style={{ marginLeft: 12, fontWeight: 800 }}>
-          Status: {isPublished ? "PUBLISHED" : "DRAFT"}
-        </span>
+        <span style={{ marginLeft: 12, fontWeight: 800 }}>Status: {isPublished ? "PUBLISHED" : "DRAFT"}</span>
       </div>
 
       {msg && <div style={{ marginBottom: 10 }}>{msg}</div>}
@@ -199,9 +241,7 @@ export default function MyRosterNextWeek() {
               <div style={{ fontWeight: 900, fontSize: 16 }}>{label}</div>
               <div style={{ fontSize: 12, color: "#444", marginTop: 2 }}>{fmtHeaderDate(dayDates[i])}</div>
 
-              <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
-                Day total: {dailyTotals[i].hours.toFixed(2)}h
-              </div>
+
 
               <div style={{ marginTop: 10 }}>
                 {!isPublished ? (
@@ -210,15 +250,13 @@ export default function MyRosterNextWeek() {
                   <div style={{ color: "#999" }}>No shifts</div>
                 ) : (
                   list.map((r) => {
-                    const h = hoursBetween(r.shift_start, r.shift_end, r.break_minutes);
+                    const h = hoursBetween(r.shift_start, r.shift_end);
                     return (
                       <div key={r.id} style={{ padding: "10px 0", borderTop: "1px dashed #eee" }}>
                         <div style={{ fontWeight: 900 }}>
                           {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
                         </div>
-                        <div style={{ fontSize: 12, color: "#666" }}>
-                          Break {r.break_minutes ?? 0}m | {h.toFixed(2)}h
-                        </div>
+                        <div style={{ fontSize: 12, color: "#666" }}>{h.toFixed(2)}h</div>
                       </div>
                     );
                   })
