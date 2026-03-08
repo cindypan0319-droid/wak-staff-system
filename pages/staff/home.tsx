@@ -458,7 +458,7 @@ export default function StaffHomePage() {
               />
 
               <CardButton
-                title="Staff Summary"
+                title="Payroll"
                 desc="Hours & pay summary"
                 href="/owner/staff-summary"
               />
