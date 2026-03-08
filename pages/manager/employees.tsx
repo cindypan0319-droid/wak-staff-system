@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 type Row = {
@@ -16,21 +16,120 @@ function nameLabel(r: Row) {
   return p ? p : f ? f : r.id.slice(0, 8);
 }
 
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const WAK_BG = "#F5F6F8";
+const CARD_BG = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
+
+function actionButton(
+  label: string,
+  onClick: () => void,
+  options?: { primary?: boolean; danger?: boolean; disabled?: boolean }
+) {
+  const primary = options?.primary;
+  const danger = options?.danger;
+  const disabled = options?.disabled;
+
+  let bg = "#fff";
+  let borderColor = BORDER;
+  let textColor = TEXT;
+
+  if (primary) {
+    bg = WAK_BLUE;
+    borderColor = WAK_BLUE;
+    textColor = "#fff";
+  }
+
+  if (danger) {
+    bg = WAK_RED;
+    borderColor = WAK_RED;
+    textColor = "#fff";
+  }
+
+  if (disabled) {
+    bg = "#D1D5DB";
+    borderColor = "#D1D5DB";
+    textColor = "#fff";
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "12px 16px",
+        minHeight: 44,
+        borderRadius: 12,
+        border: `1px solid ${borderColor}`,
+        background: bg,
+        color: textColor,
+        fontWeight: 800,
+        fontSize: 14,
+        cursor: disabled ? "not-allowed" : "pointer",
+        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function badge(label: string, kind: "green" | "yellow" | "blue" | "gray" | "red" = "gray") {
+  const styles: Record<string, { bg: string; color: string }> = {
+    green: { bg: "#DCFCE7", color: "#166534" },
+    yellow: { bg: "#FEF3C7", color: "#92400E" },
+    blue: { bg: "#EAF3FF", color: WAK_BLUE },
+    gray: { bg: "#F3F4F6", color: "#374151" },
+    red: { bg: "#FEE2E2", color: "#991B1B" },
+  };
+
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "6px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 800,
+        background: styles[kind].bg,
+        color: styles[kind].color,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function inputStyle(width?: number | string, disabled?: boolean) {
+  return {
+    width: width ?? "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box" as const,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #D1D5DB",
+    fontSize: 14,
+    background: disabled ? "#F3F4F6" : "#fff",
+    color: TEXT,
+  };
+}
+
 export default function EmployeesPage() {
   const [meRole, setMeRole] = useState<"OWNER" | "MANAGER" | "STAFF" | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // create form
   const [cFull, setCFull] = useState("");
   const [cPref, setCPref] = useState("");
   const [cRole, setCRole] = useState<"STAFF" | "MANAGER" | "OWNER">("STAFF");
 
-  // edit buffer
   const [edit, setEdit] = useState<Record<string, Partial<Row>>>({});
 
-  // set pin UI
   const [pinTarget, setPinTarget] = useState<Row | null>(null);
   const [pin1, setPin1] = useState("");
   const [pin2, setPin2] = useState("");
@@ -78,7 +177,6 @@ export default function EmployeesPage() {
         return;
       }
 
-      // ✅ IMPORTANT: must match the file name: pages/api/admin/list-profiles.ts
       const resp = await fetch("/api/admin/list-profiles", {
         method: "GET",
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -109,18 +207,27 @@ export default function EmployeesPage() {
     setLoading(true);
     setMsg("");
     try {
-      if (!cFull.trim()) return setMsg("❌ Full name is required.");
-      if (!cPref.trim()) return setMsg("❌ Preferred name is required.");
+      if (!cFull.trim()) {
+        setMsg("❌ Full name is required.");
+        return;
+      }
+      if (!cPref.trim()) {
+        setMsg("❌ Preferred name is required.");
+        return;
+      }
 
       if (meRole === "MANAGER" && cRole === "OWNER") {
-        return setMsg("❌ Manager cannot create OWNER.");
+        setMsg("❌ Manager cannot create OWNER.");
+        return;
       }
 
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;
-      if (!accessToken) return setMsg("❌ No session. Please login again.");
+      if (!accessToken) {
+        setMsg("❌ No session. Please login again.");
+        return;
+      }
 
-      // ✅ use your real API path (you said you keep create-staff.ts)
       const resp = await fetch("/api/admin/create-staff", {
         method: "POST",
         headers: {
@@ -135,7 +242,10 @@ export default function EmployeesPage() {
       });
 
       const out = await resp.json().catch(() => ({}));
-      if (!resp.ok) return setMsg("❌ " + (out?.error ?? "Create failed"));
+      if (!resp.ok) {
+        setMsg("❌ " + (out?.error ?? "Create failed"));
+        return;
+      }
 
       setMsg("✅ Created!");
       setCFull("");
@@ -154,16 +264,24 @@ export default function EmployeesPage() {
       const base = rows.find((x) => x.id === id);
       if (!base) return;
 
-      if (!canTouch(base)) return setMsg("❌ You cannot modify this user.");
+      if (!canTouch(base)) {
+        setMsg("❌ You cannot modify this user.");
+        return;
+      }
 
       const m = mergedRow(base);
 
-      // Manager can only set STAFF/MANAGER
-      if (meRole === "MANAGER" && m.role === "OWNER") return setMsg("❌ Manager cannot set OWNER role.");
+      if (meRole === "MANAGER" && m.role === "OWNER") {
+        setMsg("❌ Manager cannot set OWNER role.");
+        return;
+      }
 
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;
-      if (!accessToken) return setMsg("❌ No session. Please login again.");
+      if (!accessToken) {
+        setMsg("❌ No session. Please login again.");
+        return;
+      }
 
       const resp = await fetch("/api/admin/update-profile", {
         method: "POST",
@@ -181,7 +299,10 @@ export default function EmployeesPage() {
       });
 
       const out = await resp.json().catch(() => ({}));
-      if (!resp.ok) return setMsg("❌ " + (out?.error ?? "Save failed"));
+      if (!resp.ok) {
+        setMsg("❌ " + (out?.error ?? "Save failed"));
+        return;
+      }
 
       setMsg("✅ Saved!");
       await load();
@@ -195,16 +316,27 @@ export default function EmployeesPage() {
     setMsg("");
     try {
       if (!pinTarget) return;
-      if (!pin1.trim()) return setMsg("❌ PIN cannot be empty.");
-      if (pin1 !== pin2) return setMsg("❌ PINs do not match.");
+      if (!pin1.trim()) {
+        setMsg("❌ PIN cannot be empty.");
+        return;
+      }
+      if (pin1 !== pin2) {
+        setMsg("❌ PINs do not match.");
+        return;
+      }
 
-      if (!canTouch(pinTarget)) return setMsg("❌ You cannot set PIN for this user.");
+      if (!canTouch(pinTarget)) {
+        setMsg("❌ You cannot set PIN for this user.");
+        return;
+      }
 
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;
-      if (!accessToken) return setMsg("❌ No session. Please login again.");
+      if (!accessToken) {
+        setMsg("❌ No session. Please login again.");
+        return;
+      }
 
-      // ✅ use your real API path (you said you keep set-pin.ts)
       const resp = await fetch("/api/admin/set-pin", {
         method: "POST",
         headers: {
@@ -215,7 +347,10 @@ export default function EmployeesPage() {
       });
 
       const out = await resp.json().catch(() => ({}));
-      if (!resp.ok) return setMsg("❌ " + (out?.error ?? "Set PIN failed"));
+      if (!resp.ok) {
+        setMsg("❌ " + (out?.error ?? "Set PIN failed"));
+        return;
+      }
 
       setMsg("✅ PIN updated!");
       setPinTarget(null);
@@ -227,177 +362,372 @@ export default function EmployeesPage() {
     }
   }
 
+  const totalEmployees = rows.length;
+  const activeEmployees = rows.filter((r) => r.is_active).length;
+  const pinSetCount = rows.filter((r) => r.pin_set).length;
+
   return (
-    <div style={{ padding: 20 }}>
-            <div style={{ marginBottom: 12 }}>
-        <button onClick={() => (window.location.href = "/staff/home")}>
-          ← Back to Home
-        </button>
-      </div>
-      <h1>Employees Infomation</h1>
-
-      {msg && <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>{msg}</div>}
-      {loading && <div style={{ marginBottom: 12 }}>Loading…</div>}
-
-      {/* Create */}
-      <div style={{ border: "1px solid #ddd", padding: 12, marginBottom: 16, maxWidth: 900 }}>
-        <h2 style={{ marginTop: 0 }}>Create employee</h2>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 260px" }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Full name</div>
-            <input value={cFull} onChange={(e) => setCFull(e.target.value)} style={{ width: "100%" }} />
-          </div>
-
-          <div style={{ flex: "1 1 220px" }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Preferred name</div>
-            <input value={cPref} onChange={(e) => setCPref(e.target.value)} style={{ width: "100%" }} />
-          </div>
-
-          <div style={{ flex: "0 0 200px" }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Role</div>
-            <select value={cRole} onChange={(e) => setCRole(e.target.value as any)} style={{ width: "100%" }}>
-              <option value="STAFF">STAFF</option>
-              <option value="MANAGER">MANAGER</option>
-              {meRole === "OWNER" && <option value="OWNER">OWNER</option>}
-            </select>
-          </div>
-
-          <div style={{ alignSelf: "end" }}>
-            <button onClick={createStaff} disabled={loading} style={{ fontWeight: 800 }}>
-              Create
-            </button>
-            <button onClick={load} disabled={loading} style={{ marginLeft: 8 }}>
-              Refresh
-            </button>
-          </div>
-        </div>
-
-        <p style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
-          Email is auto-generated. After creation, click “Set PIN”.
-        </p>
-      </div>
-
-      {/* List */}
-      <div style={{ overflowX: "auto" }}>
-        <table cellPadding={8} style={{ borderCollapse: "collapse", minWidth: 1100 }}>
-          <thead>
-            <tr>
-              <th style={{ border: "1px solid #ccc" }}>Name</th>
-              <th style={{ border: "1px solid #ccc" }}>Full name</th>
-              <th style={{ border: "1px solid #ccc" }}>Preferred name</th>
-              <th style={{ border: "1px solid #ccc" }}>Role</th>
-              <th style={{ border: "1px solid #ccc" }}>Active</th>
-              <th style={{ border: "1px solid #ccc" }}>PIN</th>
-              <th style={{ border: "1px solid #ccc" }}>Actions</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {rows.map((r0) => {
-              const r = mergedRow(r0);
-              const disabled = !canTouch(r0);
-
-              return (
-                <tr key={r0.id} style={{ opacity: disabled ? 0.6 : 1 }}>
-                  <td style={{ border: "1px solid #ccc", fontWeight: 800 }}>{nameLabel(r0)}</td>
-
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <input
-                      value={r.full_name ?? ""}
-                      onChange={(e) => setEditField(r0.id, { full_name: e.target.value })}
-                      style={{ width: 220 }}
-                      disabled={disabled}
-                    />
-                  </td>
-
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <input
-                      value={r.preferred_name ?? ""}
-                      onChange={(e) => setEditField(r0.id, { preferred_name: e.target.value })}
-                      style={{ width: 180 }}
-                      disabled={disabled}
-                    />
-                  </td>
-
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <select
-                      value={r.role}
-                      onChange={(e) => setEditField(r0.id, { role: e.target.value as any })}
-                      disabled={disabled}
-                    >
-                      <option value="STAFF">STAFF</option>
-                      <option value="MANAGER">MANAGER</option>
-                      {meRole === "OWNER" && <option value="OWNER">OWNER</option>}
-                    </select>
-                  </td>
-
-                  <td style={{ border: "1px solid #ccc", textAlign: "center" }}>
-                    <input
-                      type="checkbox"
-                      checked={!!r.is_active}
-                      onChange={(e) => setEditField(r0.id, { is_active: e.target.checked })}
-                      disabled={disabled}
-                    />
-                  </td>
-
-                  <td style={{ border: "1px solid #ccc" }}>{r0.pin_set ? "✅ Set" : "❌ Not set"}</td>
-
-                  <td style={{ border: "1px solid #ccc", whiteSpace: "nowrap" }}>
-                    <button onClick={() => saveRow(r0.id)} disabled={disabled || loading}>
-                      Save
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        if (disabled) return;
-                        setPinTarget(r0);
-                        setPin1("");
-                        setPin2("");
-                      }}
-                      disabled={disabled || loading}
-                      style={{ marginLeft: 8 }}
-                    >
-                      Set PIN
-                    </button>
-
-                    <button
-                      onClick={() => (window.location.href = `/manager/employee/${r0.id}`)}
-                      style={{ marginLeft: 8 }}
-                    >
-                      Details
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* PIN modal */}
+    <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
       {pinTarget && (
-        <div style={{ marginTop: 16, border: "2px solid #333", padding: 12, maxWidth: 520 }}>
-          <h2 style={{ marginTop: 0 }}>Set PIN — {nameLabel(pinTarget as any)}</h2>
+        <>
+          <div
+            onClick={() => setPinTarget(null)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.25)",
+              zIndex: 999,
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "min(520px, calc(100vw - 32px))",
+              background: "#fff",
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              padding: 20,
+              zIndex: 1000,
+              boxShadow: "0 18px 40px rgba(0,0,0,0.18)",
+            }}
+          >
+            <h2 style={{ marginTop: 0, color: TEXT }}>Set PIN — {nameLabel(pinTarget)}</h2>
 
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>New PIN (any length)</div>
-            <input value={pin1} onChange={(e) => setPin1(e.target.value)} style={{ width: "100%", fontSize: 18 }} />
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>New PIN (any length)</div>
+              <input
+                value={pin1}
+                onChange={(e) => setPin1(e.target.value)}
+                style={inputStyle("100%")}
+              />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Confirm PIN</div>
+              <input
+                value={pin2}
+                onChange={(e) => setPin2(e.target.value)}
+                style={inputStyle("100%")}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {actionButton("Save PIN", setPinNow, { primary: true, disabled: loading })}
+              {actionButton("Cancel", () => setPinTarget(null), { disabled: loading })}
+            </div>
           </div>
-
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Confirm PIN</div>
-            <input value={pin2} onChange={(e) => setPin2(e.target.value)} style={{ width: "100%", fontSize: 18 }} />
-          </div>
-
-          <button onClick={setPinNow} disabled={loading} style={{ fontWeight: 800 }}>
-            Save PIN
-          </button>
-          <button onClick={() => setPinTarget(null)} disabled={loading} style={{ marginLeft: 8 }}>
-            Cancel
-          </button>
-        </div>
+        </>
       )}
+
+      <div style={{ maxWidth: 1220, margin: "0 auto" }}>
+        <div style={{ marginBottom: 12 }}>
+          {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
+        </div>
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 20,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <h1 style={{ margin: 0, color: TEXT }}>Employees</h1>
+          <div style={{ marginTop: 6, color: MUTED }}>
+            Create staff, update roles and manage PIN access
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            flexWrap: "wrap",
+            marginBottom: 16,
+          }}
+        >
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "#F9FAFB",
+              border: `1px solid ${BORDER}`,
+              minWidth: 160,
+            }}
+          >
+            <div style={{ fontSize: 12, color: MUTED }}>Total employees</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: TEXT }}>{totalEmployees}</div>
+          </div>
+
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "#F9FAFB",
+              border: `1px solid ${BORDER}`,
+              minWidth: 160,
+            }}
+          >
+            <div style={{ fontSize: 12, color: MUTED }}>Active employees</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: WAK_BLUE }}>{activeEmployees}</div>
+          </div>
+
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "#F9FAFB",
+              border: `1px solid ${BORDER}`,
+              minWidth: 160,
+            }}
+          >
+            <div style={{ fontSize: 12, color: MUTED }}>PIN set</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: WAK_RED }}>{pinSetCount}</div>
+          </div>
+        </div>
+
+        {msg && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              background: "#fff",
+              padding: "10px 12px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: TEXT,
+            }}
+          >
+            {msg}
+          </div>
+        )}
+
+        {loading && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              background: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: MUTED,
+            }}
+          >
+            Loading...
+          </div>
+        )}
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div style={{ marginBottom: 14 }}>
+            <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Create employee</h2>
+            <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
+              Email is auto-generated. After creation, click “Set PIN”.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
+            <div style={{ flex: "1 1 260px" }}>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Full name</div>
+              <input
+                value={cFull}
+                onChange={(e) => setCFull(e.target.value)}
+                style={inputStyle("100%")}
+              />
+            </div>
+
+            <div style={{ flex: "1 1 220px" }}>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Preferred name</div>
+              <input
+                value={cPref}
+                onChange={(e) => setCPref(e.target.value)}
+                style={inputStyle("100%")}
+              />
+            </div>
+
+            <div style={{ flex: "0 0 200px" }}>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Role</div>
+              <select
+                value={cRole}
+                onChange={(e) => setCRole(e.target.value as any)}
+                style={inputStyle("100%")}
+              >
+                <option value="STAFF">STAFF</option>
+                <option value="MANAGER">MANAGER</option>
+                {meRole === "OWNER" && <option value="OWNER">OWNER</option>}
+              </select>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {actionButton("Create", createStaff, { primary: true, disabled: loading })}
+              {actionButton("Refresh", load, { disabled: loading })}
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div style={{ marginBottom: 14 }}>
+            <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Employee list</h2>
+            <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
+              Managers cannot edit owner accounts.
+            </div>
+          </div>
+
+          <div style={{ overflowX: "auto" }}>
+            <table
+              cellPadding={0}
+              style={{
+                width: "100%",
+                borderCollapse: "separate",
+                borderSpacing: 0,
+                minWidth: 1120,
+              }}
+            >
+              <thead>
+                <tr>
+                  {["Name", "Full name", "Preferred name", "Role", "Active", "PIN", "Actions"].map((head) => (
+                    <th
+                      key={head}
+                      style={{
+                        textAlign: "left",
+                        padding: "10px 12px",
+                        borderBottom: `1px solid ${BORDER}`,
+                        color: MUTED,
+                        fontSize: 13,
+                        background: "#FAFAFA",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {head}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody>
+                {rows.map((r0) => {
+                  const r = mergedRow(r0);
+                  const disabled = !canTouch(r0);
+
+                  return (
+                    <tr key={r0.id} style={{ opacity: disabled ? 0.62 : 1 }}>
+                      <td
+                        style={{
+                          padding: "14px 12px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          fontWeight: 800,
+                          color: TEXT,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {nameLabel(r0)}
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        <input
+                          value={r.full_name ?? ""}
+                          onChange={(e) => setEditField(r0.id, { full_name: e.target.value })}
+                          style={inputStyle(150, disabled)}
+                          disabled={disabled}
+                        />
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        <input
+                          value={r.preferred_name ?? ""}
+                          onChange={(e) => setEditField(r0.id, { preferred_name: e.target.value })}
+                          style={inputStyle(150, disabled)}
+                          disabled={disabled}
+                        />
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        <select
+                          value={r.role}
+                          onChange={(e) => setEditField(r0.id, { role: e.target.value as any })}
+                          disabled={disabled}
+                          style={inputStyle(130, disabled)}
+                        >
+                          <option value="STAFF">STAFF</option>
+                          <option value="MANAGER">MANAGER</option>
+                          {meRole === "OWNER" && <option value="OWNER">OWNER</option>}
+                        </select>
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "14px 12px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          textAlign: "center",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!r.is_active}
+                          onChange={(e) => setEditField(r0.id, { is_active: e.target.checked })}
+                          disabled={disabled}
+                        />
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        {r0.pin_set ? badge("Set", "green") : badge("Not set", "red")}
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "14px 12px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {actionButton("Save", () => saveRow(r0.id), {
+                            primary: true,
+                            disabled: disabled || loading,
+                          })}
+
+                          {actionButton(
+                            "Set PIN",
+                            () => {
+                              if (disabled) return;
+                              setPinTarget(r0);
+                              setPin1("");
+                              setPin2("");
+                            },
+                            { disabled: disabled || loading }
+                          )}
+
+                          {actionButton("Details", () => (window.location.href = `/manager/employee/${r0.id}`))}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -5,6 +5,14 @@ import { supabase } from "../../lib/supabaseClient";
 const EST_COGS_RATE = 0.35;
 type Granularity = "day" | "week" | "month";
 
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const WAK_BG = "#F5F6F8";
+const CARD_BG = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
+
 function formatDate(date: Date) {
   return date.toISOString().split("T")[0];
 }
@@ -27,8 +35,8 @@ function periodKey(dateStr: string, g: Granularity) {
   if (g === "day") return dateStr;
 
   if (g === "week") {
-    const day = d.getDay(); // 0 Sun..6 Sat
-    const diff = (day + 6) % 7; // Monday=0
+    const day = d.getDay();
+    const diff = (day + 6) % 7;
     d.setDate(d.getDate() - diff);
     return formatDate(d);
   }
@@ -36,21 +44,91 @@ function periodKey(dateStr: string, g: Granularity) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-const label: React.CSSProperties = { fontSize: 12, color: "#64748b", marginBottom: 4 };
+function actionButton(
+  label: string,
+  onClick: () => void,
+  options?: { primary?: boolean; danger?: boolean; disabled?: boolean }
+) {
+  const primary = options?.primary;
+  const danger = options?.danger;
+  const disabled = options?.disabled;
 
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "10px 12px",
-  borderBottom: "1px solid #eee",
-  fontSize: 13,
-  color: "#334155",
-};
+  let bg = "#fff";
+  let borderColor = BORDER;
+  let textColor = TEXT;
 
-const td: React.CSSProperties = {
-  padding: "10px 12px",
-  borderBottom: "1px solid #f1f5f9",
-  fontSize: 13,
-};
+  if (primary) {
+    bg = WAK_BLUE;
+    borderColor = WAK_BLUE;
+    textColor = "#fff";
+  }
+
+  if (danger) {
+    bg = WAK_RED;
+    borderColor = WAK_RED;
+    textColor = "#fff";
+  }
+
+  if (disabled) {
+    bg = "#D1D5DB";
+    borderColor = "#D1D5DB";
+    textColor = "#fff";
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "12px 16px",
+        minHeight: 44,
+        borderRadius: 12,
+        border: `1px solid ${borderColor}`,
+        background: bg,
+        color: textColor,
+        fontWeight: 800,
+        fontSize: 14,
+        cursor: disabled ? "not-allowed" : "pointer",
+        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function inputStyle(width?: number | string) {
+  return {
+    width: width ?? "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box" as const,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #D1D5DB",
+    fontSize: 14,
+    background: "#fff",
+    color: TEXT,
+  };
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: "12px 14px",
+        borderRadius: 14,
+        background: "#F9FAFB",
+        border: `1px solid ${BORDER}`,
+        minWidth: 180,
+        flex: "1 1 180px",
+      }}
+    >
+      <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
+      <div style={{ fontWeight: 800, fontSize: 18, color: TEXT, marginTop: 6 }}>{value}</div>
+    </div>
+  );
+}
 
 export default function OwnerProfitReportPage() {
   const router = useRouter();
@@ -72,7 +150,6 @@ export default function OwnerProfitReportPage() {
   const [loading, setLoading] = useState(true);
   const [checkingAuth, setCheckingAuth] = useState(true);
 
-  // read query params once router is ready
   useEffect(() => {
     if (!router.isReady) return;
 
@@ -142,7 +219,6 @@ export default function OwnerProfitReportPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // whenever date range or granularity changes, refetch
   useEffect(() => {
     if (checkingAuth) return;
     fetchAll();
@@ -185,81 +261,217 @@ export default function OwnerProfitReportPage() {
     });
   }, [dailyRows, invoiceSeries, granularity]);
 
-  if (checkingAuth) return <div style={{ padding: 30 }}>Checking...</div>;
+  const totals = useMemo(() => {
+    const revenue = grouped.reduce((s: number, r: any) => s + Number(r.revenue || 0), 0);
+    const actualCost = grouped.reduce((s: number, r: any) => s + Number(r.actualCost || 0), 0);
+    const estCost = grouped.reduce((s: number, r: any) => s + Number(r.estCost || 0), 0);
+    const actProfit = grouped.reduce((s: number, r: any) => s + Number(r.actProfit || 0), 0);
+    const estProfit = grouped.reduce((s: number, r: any) => s + Number(r.estProfit || 0), 0);
 
-  return (
-    <div style={{ padding: 30 }}>
-      <h1>Profit Report</h1>
+    return {
+      revenue,
+      actualCost,
+      estCost,
+      actProfit,
+      estProfit,
+      actMargin: revenue > 0 ? (actProfit / revenue) * 100 : 0,
+      estMargin: revenue > 0 ? (estProfit / revenue) * 100 : 0,
+    };
+  }, [grouped]);
 
-      <div style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={label}>Start</div>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        </div>
-
-        <div>
-          <div style={label}>End</div>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-        </div>
-
-        <div>
-          <div style={label}>View by</div>
-          <select value={granularity} onChange={(e) => setGranularity(e.target.value as Granularity)}>
-            <option value="day">Day</option>
-            <option value="week">Week (Mon)</option>
-            <option value="month">Month</option>
-          </select>
-        </div>
-
-        <div style={{ alignSelf: "end" }}>
-          <button onClick={fetchAll}>Refresh</button>
-          <button onClick={() => router.push("/owner/dashboard")} style={{ marginLeft: 10 }}>
-            ← Back
-          </button>
+  if (checkingAuth) {
+    return (
+      <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 24,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <h1 style={{ margin: 0, color: TEXT }}>Profit Report</h1>
+            <div style={{ marginTop: 10, color: MUTED }}>Checking...</div>
+          </div>
         </div>
       </div>
+    );
+  }
 
-      {loading ? (
-        <p>Loading...</p>
-      ) : (
-        <div style={{ overflowX: "auto", border: "1px solid #eee", borderRadius: 8 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#f8fafc" }}>
-                <th style={th}>Period</th>
-                <th style={th}>Revenue</th>
-                <th style={th}>Actual Invoice Cost</th>
-                <th style={th}>Est COGS (35%)</th>
-                <th style={th}>Actual Profit</th>
-                <th style={th}>Est Profit</th>
-                <th style={th}>Actual Margin</th>
-                <th style={th}>Est Margin</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grouped.map((r: any) => (
-                <tr key={r.period_start}>
-                  <td style={td}>{r.period_start}</td>
-                  <td style={td}>${r.revenue.toFixed(2)}</td>
-                  <td style={td}>${r.actualCost.toFixed(2)}</td>
-                  <td style={td}>${r.estCost.toFixed(2)}</td>
-                  <td style={td}>${r.actProfit.toFixed(2)}</td>
-                  <td style={td}>${r.estProfit.toFixed(2)}</td>
-                  <td style={td}>{r.actMargin.toFixed(2)}%</td>
-                  <td style={td}>{r.estMargin.toFixed(2)}%</td>
-                </tr>
-              ))}
-              {grouped.length === 0 ? (
-                <tr>
-                  <td style={td} colSpan={8}>
-                    No data in this range.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+  return (
+    <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+        <div style={{ marginBottom: 12 }}>
+          {actionButton("← Back to Dashboard", () => router.push("/owner/dashboard"))}
         </div>
-      )}
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 20,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <h1 style={{ margin: 0, color: TEXT }}>Profit Report</h1>
+        </div>
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              alignItems: "end",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Start</div>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                style={inputStyle(170)}
+              />
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>End</div>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                style={inputStyle(170)}
+              />
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>View by</div>
+              <select
+                value={granularity}
+                onChange={(e) => setGranularity(e.target.value as Granularity)}
+                style={inputStyle(150)}
+              >
+                <option value="day">Day</option>
+                <option value="week">Week (Mon)</option>
+                <option value="month">Month</option>
+              </select>
+            </div>
+
+            {actionButton("Refresh", fetchAll, { primary: true })}
+            {actionButton("Back", () => router.push("/owner/dashboard"))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            flexWrap: "wrap",
+            marginBottom: 16,
+          }}
+        >
+          <StatCard label="Revenue" value={`$${totals.revenue.toFixed(2)}`} />
+          <StatCard label="Actual Invoice Cost" value={`$${totals.actualCost.toFixed(2)}`} />
+          <StatCard label="Est COGS (35%)" value={`$${totals.estCost.toFixed(2)}`} />
+          <StatCard label="Actual Profit" value={`$${totals.actProfit.toFixed(2)}`} />
+          <StatCard label="Est Profit" value={`$${totals.estProfit.toFixed(2)}`} />
+          <StatCard label="Actual Margin" value={`${totals.actMargin.toFixed(2)}%`} />
+          <StatCard label="Est Margin" value={`${totals.estMargin.toFixed(2)}%`} />
+        </div>
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          {loading ? (
+            <div style={{ color: MUTED }}>Loading...</div>
+          ) : (
+            <>
+              <div style={{ overflowX: "auto", border: `1px solid ${BORDER}`, borderRadius: 12 }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "separate",
+                    borderSpacing: 0,
+                    minWidth: 980,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: "#FAFAFA" }}>
+                      <th style={th}>Period</th>
+                      <th style={th}>Revenue</th>
+                      <th style={th}>Actual Invoice Cost</th>
+                      <th style={th}>Est COGS (35%)</th>
+                      <th style={th}>Actual Profit</th>
+                      <th style={th}>Est Profit</th>
+                      <th style={th}>Actual Margin</th>
+                      <th style={th}>Est Margin</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {grouped.map((r: any) => (
+                      <tr key={r.period_start}>
+                        <td style={td}>{r.period_start}</td>
+                        <td style={td}>${r.revenue.toFixed(2)}</td>
+                        <td style={td}>${r.actualCost.toFixed(2)}</td>
+                        <td style={td}>${r.estCost.toFixed(2)}</td>
+                        <td style={td}>${r.actProfit.toFixed(2)}</td>
+                        <td style={td}>${r.estProfit.toFixed(2)}</td>
+                        <td style={td}>{r.actMargin.toFixed(2)}%</td>
+                        <td style={td}>{r.estMargin.toFixed(2)}%</td>
+                      </tr>
+                    ))}
+
+                    {grouped.length === 0 ? (
+                      <tr>
+                        <td style={td} colSpan={8}>
+                          No data in this range.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
+
+const th: React.CSSProperties = {
+  textAlign: "left",
+  padding: "12px 12px",
+  borderBottom: `1px solid ${BORDER}`,
+  fontSize: 13,
+  color: MUTED,
+  whiteSpace: "nowrap",
+};
+
+const td: React.CSSProperties = {
+  padding: "12px 12px",
+  borderBottom: `1px solid ${BORDER}`,
+  fontSize: 13,
+  color: TEXT,
+};

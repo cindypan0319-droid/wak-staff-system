@@ -14,9 +14,47 @@ type FeeSetting = {
   subscription_fee: number;
 };
 
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const BG = "#F5F6F8";
+const CARD = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
+
 function toNum(v: any) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+function inputStyle(width?: number | string) {
+  return {
+    width: width ?? "100%",
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #D1D5DB",
+    fontSize: 14,
+  };
+}
+
+function button(label: string, onClick: () => void, primary?: boolean, disabled?: boolean) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "10px 14px",
+        borderRadius: 10,
+        border: "none",
+        background: primary ? WAK_BLUE : "#E5E7EB",
+        color: primary ? "#fff" : TEXT,
+        fontWeight: 700,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
 }
 
 export default function PlatformsPage() {
@@ -59,7 +97,7 @@ export default function PlatformsPage() {
 
     if (error) {
       setViewerRole(null);
-      setMsg("❌ Cannot load role: " + error.message);
+      setMsg("Cannot load role");
       setAuthLoading(false);
       return;
     }
@@ -70,24 +108,19 @@ export default function PlatformsPage() {
 
   async function load() {
     setLoading(true);
-    setMsg("");
 
     const res = await supabase
       .from("platforms")
       .select("id, name, is_active, sort_order")
-      .order("sort_order", { ascending: true })
-      .order("name", { ascending: true });
+      .order("sort_order", { ascending: true });
 
     if (res.error) {
-      setMsg("❌ Cannot load platforms: " + res.error.message);
-      setPlatforms([]);
-      setFeeSettings([]);
-      setDraft({});
+      setMsg("Cannot load platforms");
       setLoading(false);
       return;
     }
 
-    const plats = (res.data ?? []) as any as Platform[];
+    const plats = (res.data ?? []) as Platform[];
     setPlatforms(plats);
 
     if (isOwner) {
@@ -95,32 +128,25 @@ export default function PlatformsPage() {
         .from("platform_fee_settings")
         .select("platform_name, commission_pct, subscription_fee");
 
-      if (f.error) {
-        setMsg("❌ Cannot load fee settings: " + f.error.message);
-        setFeeSettings([]);
-        setDraft({});
-      } else {
-        const settings: FeeSetting[] = (f.data ?? []).map((x: any) => ({
-          platform_name: x.platform_name,
-          commission_pct: toNum(x.commission_pct),
-          subscription_fee: toNum(x.subscription_fee),
-        }));
-        setFeeSettings(settings);
+      const settings: FeeSetting[] = (f.data ?? []).map((x: any) => ({
+        platform_name: x.platform_name,
+        commission_pct: toNum(x.commission_pct),
+        subscription_fee: toNum(x.subscription_fee),
+      }));
 
-        // build draft based on loaded settings + platforms
-        const nextDraft: Record<string, { commission_pct: number; subscription_fee: number }> = {};
-        for (const p of plats) {
-          const s = settings.find((z) => z.platform_name === p.name);
-          nextDraft[p.name] = {
-            commission_pct: toNum(s?.commission_pct ?? 0),
-            subscription_fee: toNum(s?.subscription_fee ?? 0),
-          };
-        }
-        setDraft(nextDraft);
+      setFeeSettings(settings);
+
+      const nextDraft: Record<string, { commission_pct: number; subscription_fee: number }> = {};
+
+      for (const p of plats) {
+        const s = settings.find((z) => z.platform_name === p.name);
+        nextDraft[p.name] = {
+          commission_pct: toNum(s?.commission_pct ?? 0),
+          subscription_fee: toNum(s?.subscription_fee ?? 0),
+        };
       }
-    } else {
-      setFeeSettings([]);
-      setDraft({});
+
+      setDraft(nextDraft);
     }
 
     setLoading(false);
@@ -128,12 +154,10 @@ export default function PlatformsPage() {
 
   useEffect(() => {
     loadPermission();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!authLoading && isManagerOrOwner) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, viewerRole]);
 
   function setDraftField(name: string, patch: Partial<{ commission_pct: number; subscription_fee: number }>) {
@@ -145,35 +169,23 @@ export default function PlatformsPage() {
 
   async function add() {
     if (!isOwner) return;
+
     const name = newName.trim();
-    if (!name) return setMsg("❌ Platform name is required.");
+    if (!name) return;
 
     setLoading(true);
-    setMsg("");
 
-    const res = await supabase.from("platforms").insert({
+    await supabase.from("platforms").insert({
       name,
       is_active: true,
       sort_order: 100,
     });
 
-    if (res.error) {
-      setMsg("❌ Add failed: " + res.error.message);
-      setLoading(false);
-      return;
-    }
-
-    const f = await supabase.from("platform_fee_settings").insert({
+    await supabase.from("platform_fee_settings").insert({
       platform_name: name,
       commission_pct: 0,
       subscription_fee: 0,
     });
-
-    if (f.error) {
-      setMsg("⚠️ Platform added, but fee settings create failed: " + f.error.message);
-    } else {
-      setMsg("✅ Added!");
-    }
 
     setNewName("");
     await load();
@@ -184,211 +196,202 @@ export default function PlatformsPage() {
     if (!isOwner) return;
 
     setLoading(true);
-    setMsg("");
 
-    const res = await supabase
+    await supabase
       .from("platforms")
       .update({ is_active: !p.is_active })
       .eq("id", p.id);
 
-    if (res.error) setMsg("❌ Update failed: " + res.error.message);
-    else {
-      setMsg("✅ Updated!");
-      await load();
-    }
-
+    await load();
     setLoading(false);
   }
 
   async function updateSort(p: Platform, sort: number) {
     if (!isOwner) return;
 
-    setLoading(true);
-    setMsg("");
+    await supabase
+      .from("platforms")
+      .update({ sort_order: sort })
+      .eq("id", p.id);
 
-    const res = await supabase.from("platforms").update({ sort_order: sort }).eq("id", p.id);
-
-    if (res.error) setMsg("❌ Update failed: " + res.error.message);
-    else {
-      setMsg("✅ Updated!");
-      await load();
-    }
-
-    setLoading(false);
+    load();
   }
 
   async function saveFee(platformName: string) {
     if (!isOwner) return;
 
-    setLoading(true);
-    setMsg("");
-
     const d = draft[platformName] ?? { commission_pct: 0, subscription_fee: 0 };
 
-    const payload = {
+    await supabase.from("platform_fee_settings").upsert({
       platform_name: platformName,
-      commission_pct: Number(d.commission_pct ?? 0),
-      subscription_fee: Number(d.subscription_fee ?? 0),
-    };
+      commission_pct: d.commission_pct,
+      subscription_fee: d.subscription_fee,
+    });
 
-    const res = await supabase.from("platform_fee_settings").upsert(payload, {
-      onConflict: "platform_name",
-    } as any);
-
-    if (res.error) setMsg("❌ Save fee failed: " + res.error.message);
-    else setMsg("✅ Fee saved!");
-
-    await load();
-    setLoading(false);
+    load();
   }
 
-  if (authLoading) return <div style={{ padding: 20 }}>Loading permission...</div>;
+  if (authLoading) return <div style={{ padding: 20 }}>Loading...</div>;
 
   if (!isManagerOrOwner) {
     return (
       <div style={{ padding: 20 }}>
         <h1>Platforms</h1>
-        <div style={{ padding: 12, border: "1px solid #ddd", marginTop: 12 }}>
-          <b>Access denied.</b> This page is only for <b>Owner / Manager</b>.
-          <br />
-          Your role: <b>{viewerRole ?? "UNKNOWN"}</b>
-        </div>
+        Access denied.
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 20, maxWidth: 1050 }}>
-            <div style={{ marginBottom: 12 }}>
-        <button onClick={() => (window.location.href = "/staff/home")}>
-          ← Back to Home
-        </button>
-      </div>
-      <h1>Platforms Commission</h1>
+    <div style={{ background: BG, minHeight: "100vh", padding: 20 }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
 
-      {!isOwner && (
-        <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>
-          Manager can <b>view</b> platforms. Only <b>Owner</b> can add/remove/edit (including fee settings).
+        <div style={{ marginBottom: 12 }}>
+          {button("← Back to Home", () => (window.location.href = "/staff/home"))}
         </div>
-      )}
 
-      <div style={{ display: "flex", gap: 10, alignItems: "end", marginBottom: 12, flexWrap: "wrap" }}>
-        <div style={{ minWidth: 260 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Add platform (Owner only)</div>
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="e.g. Uber Eats"
-            disabled={!isOwner || loading}
-            style={{ width: "100%" }}
-          />
+        <div
+          style={{
+            background: CARD,
+            padding: 20,
+            borderRadius: 16,
+            border: `1px solid ${BORDER}`,
+            marginBottom: 16,
+          }}
+        >
+          <h1 style={{ margin: 0 }}>Platform Commission</h1>
         </div>
-        <button onClick={add} disabled={!isOwner || loading}>
-          Add
-        </button>
-        <button onClick={load} disabled={loading}>
-          Refresh
-        </button>
-        {loading && <span>Loading...</span>}
-      </div>
 
-      {msg && <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>{msg}</div>}
+        <div
+          style={{
+            background: CARD,
+            padding: 20,
+            borderRadius: 16,
+            border: `1px solid ${BORDER}`,
+            marginBottom: 16,
+          }}
+        >
 
-      <div style={{ overflowX: "auto" }}>
-        <table cellPadding={8} style={{ borderCollapse: "collapse", minWidth: 950 }}>
-          <thead>
-            <tr>
-              <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Name</th>
-              <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Active</th>
-              <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Sort</th>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
+            <div style={{ minWidth: 240 }}>
+              <div style={{ fontSize: 12, color: MUTED }}>Add platform</div>
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Uber Eats"
+                disabled={!isOwner}
+                style={inputStyle()}
+              />
+            </div>
 
-              {isOwner && (
-                <>
-                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Commission </th>
-                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Subscription fee </th>
-                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Save fee</th>
-                </>
-              )}
+            {button("Add", add, true, !isOwner)}
+            {button("Refresh", load)}
+          </div>
+        </div>
 
-              <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Action</th>
-            </tr>
-          </thead>
+        {msg && (
+          <div style={{ padding: 10, background: CARD, border: `1px solid ${BORDER}`, marginBottom: 12 }}>
+            {msg}
+          </div>
+        )}
 
-          <tbody>
-            {platforms.map((p) => {
-              const d = draft[p.name] ?? { commission_pct: 0, subscription_fee: 0 };
-
-              return (
-                <tr key={p.id}>
-                  <td style={{ border: "1px solid #ccc", fontWeight: 700 }}>{p.name}</td>
-                  <td style={{ border: "1px solid #ccc" }}>{p.is_active ? "YES" : "NO"}</td>
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <input
-                      type="number"
-                      value={p.sort_order}
-                      disabled={!isOwner || loading}
-                      onChange={(e) => updateSort(p, Number(e.target.value))}
-                      style={{ width: 100 }}
-                    />
-                  </td>
-
-                  {isOwner && (
-                    <>
-                      <td style={{ border: "1px solid #ccc" }}>
-                        <input
-                          type="number"
-                          value={d.commission_pct}
-                          disabled={loading}
-                          onChange={(e) => setDraftField(p.name, { commission_pct: Number(e.target.value) })}
-                          style={{ width: 140 }}
-                        />
-                      </td>
-
-                      <td style={{ border: "1px solid #ccc" }}>
-                        <input
-                          type="number"
-                          value={d.subscription_fee}
-                          disabled={loading}
-                          onChange={(e) => setDraftField(p.name, { subscription_fee: Number(e.target.value) })}
-                          style={{ width: 160 }}
-                        />
-                      </td>
-
-                      <td style={{ border: "1px solid #ccc" }}>
-                        <button disabled={loading} onClick={() => saveFee(p.name)}>
-                          Save fee
-                        </button>
-                      </td>
-                    </>
-                  )}
-
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <button onClick={() => toggleActive(p)} disabled={!isOwner || loading}>
-                      {p.is_active ? "Deactivate" : "Activate"}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-
-            {platforms.length === 0 && (
+        <div
+          style={{
+            background: CARD,
+            borderRadius: 16,
+            border: `1px solid ${BORDER}`,
+            overflow: "hidden",
+          }}
+        >
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead style={{ background: "#FAFAFA" }}>
               <tr>
-                <td colSpan={isOwner ? 7 : 4} style={{ padding: 12, color: "#999" }}>
-                  No platforms yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+                <th style={{ padding: 10, textAlign: "left" }}>Platform</th>
+                <th style={{ padding: 10, textAlign: "left" }}>Active</th>
+                <th style={{ padding: 10, textAlign: "left" }}>Sort</th>
 
-      {/* small note for owner */}
-      {isOwner && (
-        <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-          Fees in <b>platform_income</b> will be auto-calculated by DB trigger:{" "}
-          <b>fees = gross_income × commission% + subscription fee</b>.
+                {isOwner && (
+                  <>
+                    <th style={{ padding: 10 }}>Commission %</th>
+                    <th style={{ padding: 10 }}>Subscription</th>
+                    <th style={{ padding: 10 }}>Save</th>
+                  </>
+                )}
+
+                <th style={{ padding: 10 }}>Action</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {platforms.map((p) => {
+                const d = draft[p.name] ?? { commission_pct: 0, subscription_fee: 0 };
+
+                return (
+                  <tr key={p.id} style={{ borderTop: `1px solid ${BORDER}` }}>
+                    <td style={{ padding: 10, fontWeight: 700 }}>{p.name}</td>
+                    <td style={{ padding: 10 }}>{p.is_active ? "YES" : "NO"}</td>
+
+                    <td style={{ padding: 10 }}>
+                      <input
+                        type="number"
+                        value={p.sort_order}
+                        onChange={(e) => updateSort(p, Number(e.target.value))}
+                        style={inputStyle(80)}
+                        disabled={!isOwner}
+                      />
+                    </td>
+
+                    {isOwner && (
+                      <>
+                        <td style={{ padding: 10 }}>
+                          <input
+                            type="number"
+                            value={d.commission_pct}
+                            onChange={(e) =>
+                              setDraftField(p.name, { commission_pct: Number(e.target.value) })
+                            }
+                            style={inputStyle(120)}
+                          />
+                        </td>
+
+                        <td style={{ padding: 10 }}>
+                          <input
+                            type="number"
+                            value={d.subscription_fee}
+                            onChange={(e) =>
+                              setDraftField(p.name, { subscription_fee: Number(e.target.value) })
+                            }
+                            style={inputStyle(140)}
+                          />
+                        </td>
+
+                        <td style={{ padding: 10 }}>
+                          {button("Save", () => saveFee(p.name), true)}
+                        </td>
+                      </>
+                    )}
+
+                    <td style={{ padding: 10 }}>
+                      {button(
+                        p.is_active ? "Deactivate" : "Activate",
+                        () => toggleActive(p),
+                        false,
+                        !isOwner
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      )}
+
+        {isOwner && (
+          <div style={{ marginTop: 12, fontSize: 12, color: MUTED }}>
+            Fees will be auto-calculated: <b>gross × commission + subscription</b>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -7,11 +7,19 @@ type ShiftRow = {
   staff_id: string;
   shift_start: string;
   shift_end: string;
-  break_minutes: number; // keep (DB has it), but we do not show/use it
+  break_minutes: number;
   week_start: string | null;
 };
 
 const dayLabels = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"] as const;
+
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const WAK_BG = "#F5F6F8";
+const CARD_BG = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
 
 function toISODate(d: Date) {
   const yyyy = d.getFullYear();
@@ -36,8 +44,11 @@ function weekRangeText(weekStartISO: string) {
 }
 
 function fmtTime(iso: string) {
-  // ✅ 24-hour
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function fmtHeaderDate(d: Date) {
@@ -46,12 +57,11 @@ function fmtHeaderDate(d: Date) {
 
 function dayIndexFromISO(iso: string) {
   const d = new Date(iso);
-  const dow = d.getDay(); // 0 Sun ... 4 Thu
+  const dow = d.getDay();
   const map: Record<number, number> = { 4: 0, 5: 1, 6: 2, 0: 3, 1: 4, 2: 5, 3: 6 };
   return map[dow];
 }
 
-// ✅ paid break: do NOT subtract break minutes
 function hoursBetween(startISO: string, endISO: string) {
   const ms = new Date(endISO).getTime() - new Date(startISO).getTime();
   const hrs = ms / 3600000;
@@ -70,16 +80,8 @@ function getThisWeekThuISO() {
   return toISODate(thisThu);
 }
 
-function getNextWeekThuISO() {
-  const now = new Date();
-  const dow = now.getDay();
-  const diffToThu = (dow - 4 + 7) % 7;
-  const thisThu = new Date(now);
-  thisThu.setHours(0, 0, 0, 0);
-  thisThu.setDate(now.getDate() - diffToThu);
-  const nextThu = new Date(thisThu);
-  nextThu.setDate(thisThu.getDate() + 7);
-  return toISODate(nextThu);
+function isSameISODate(a: string, b: string) {
+  return a === b;
 }
 
 export default function MyRosterNextWeek() {
@@ -107,6 +109,7 @@ export default function MyRosterNextWeek() {
   const [rows, setRows] = useState<ShiftRow[]>([]);
   const [msg, setMsg] = useState("");
   const [isPublished, setIsPublished] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   async function ensureLogin() {
     const { data } = await supabase.auth.getUser();
@@ -131,6 +134,7 @@ export default function MyRosterNextWeek() {
       setIsPublished(false);
       return false;
     }
+
     const pub = !!r.data?.published;
     setIsPublished(pub);
     return pub;
@@ -138,31 +142,38 @@ export default function MyRosterNextWeek() {
 
   async function loadMyShifts() {
     if (!uid) return;
+
+    setLoading(true);
     setMsg("");
 
-    const pub = await loadPublishedStatus();
-    if (!pub) {
-      setRows([]);
-      setMsg("Roster not published yet. Please check later.");
-      return;
+    try {
+      const pub = await loadPublishedStatus();
+
+      if (!pub) {
+        setRows([]);
+        setMsg("Roster not published yet. Please check later.");
+        return;
+      }
+
+      const r = await supabase
+        .from("shifts")
+        .select("id, store_id, staff_id, shift_start, shift_end, break_minutes, week_start")
+        .eq("store_id", storeId)
+        .eq("staff_id", uid)
+        .gte("shift_start", range.start.toISOString())
+        .lt("shift_start", range.end.toISOString())
+        .order("shift_start", { ascending: true });
+
+      if (r.error) {
+        setMsg("❌ Cannot load your roster: " + r.error.message);
+        setRows([]);
+        return;
+      }
+
+      setRows((r.data ?? []) as any);
+    } finally {
+      setLoading(false);
     }
-
-    const r = await supabase
-      .from("shifts")
-      .select("id, store_id, staff_id, shift_start, shift_end, break_minutes, week_start")
-      .eq("store_id", storeId)
-      .eq("staff_id", uid)
-      .gte("shift_start", range.start.toISOString())
-      .lt("shift_start", range.end.toISOString())
-      .order("shift_start", { ascending: true });
-
-    if (r.error) {
-      setMsg("❌ Cannot load your roster: " + r.error.message);
-      setRows([]);
-      return;
-    }
-
-    setRows((r.data ?? []) as any);
   }
 
   useEffect(() => {
@@ -196,75 +207,291 @@ export default function MyRosterNextWeek() {
 
   const weekTotalHours = dailyTotals.reduce((s, x) => s + x.hours, 0);
 
+  function actionButton(
+    label: string,
+    onClick: () => void,
+    options?: { primary?: boolean; disabled?: boolean }
+  ) {
+    const primary = options?.primary;
+    const disabled = options?.disabled;
+
+    return (
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          padding: "12px 16px",
+          minHeight: 46,
+          borderRadius: 12,
+          border: `1px solid ${primary ? WAK_BLUE : BORDER}`,
+          background: disabled ? "#D1D5DB" : primary ? WAK_BLUE : "#fff",
+          color: primary || disabled ? "#fff" : TEXT,
+          fontWeight: 800,
+          fontSize: 15,
+          cursor: disabled ? "not-allowed" : "pointer",
+          boxShadow: primary ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
+
+  function infoCard(label: string, value: string, color?: string) {
+    return (
+      <div
+        style={{
+          padding: "10px 12px",
+          borderRadius: 12,
+          background: "#F9FAFB",
+          border: `1px solid ${BORDER}`,
+          minWidth: 160,
+        }}
+      >
+        <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
+        <div style={{ fontWeight: 800, fontSize: 18, color: color || TEXT }}>{value}</div>
+      </div>
+    );
+  }
+
+  function statusBadge(published: boolean) {
+    return (
+      <span
+        style={{
+          display: "inline-block",
+          padding: "7px 11px",
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 800,
+          background: published ? "#DCFCE7" : "#FEF3C7",
+          color: published ? "#166534" : "#92400E",
+        }}
+      >
+        {published ? "PUBLISHED" : "DRAFT"}
+      </span>
+    );
+  }
+
+  const todayISO = toISODate(new Date());
+
   return (
-    <div style={{ padding: 20 }}>
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={() => (window.location.href = "/staff/home")}>← Back to Home</button>
-      </div>
+    <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            gap: 16,
+            flexWrap: "wrap",
+            marginBottom: 18,
+          }}
+        >
+          <div>
+            <h1 style={{ margin: 0, color: TEXT }}>My Roster</h1>
+            <div style={{ marginTop: 6, color: MUTED }}>
+              Your shifts for this week (Thu → Wed)
+            </div>
+          </div>
 
-      <h1>My Roster — Next Week (Thu → Wed)</h1>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              onClick={() => (window.location.href = "/staff/home")}
+              style={{
+                padding: "12px 16px",
+                minHeight: 46,
+                borderRadius: 12,
+                border: `1px solid ${BORDER}`,
+                background: "#fff",
+                color: TEXT,
+                fontWeight: 800,
+                fontSize: 15,
+                cursor: "pointer",
+              }}
+            >
+              ← Back to Home
+            </button>
 
-      <div style={{ marginBottom: 10 }}>
-        Week (Thu→Wed):{" "}
-        <button onClick={() => setWeekStart((w) => addDaysISO(w, -7))}>← Prev Week</button>
-        <button onClick={() => setWeekStart(getThisWeekThuISO())} style={{ marginLeft: 8 }}>
-          This Week
-        </button>
-        <button onClick={() => setWeekStart((w) => addDaysISO(w, 7))} style={{ marginLeft: 8 }}>
-          Next →
-        </button>
-
-        <input type="date" value={weekStart} readOnly style={{ marginLeft: 8 }} />
-
-        <span style={{ marginLeft: 12, color: "#666", fontWeight: 700 }}>{weekRangeText(weekStart)}</span>
-
-        <button onClick={loadMyShifts} style={{ marginLeft: 8 }}>
-          Refresh
-        </button>
-
-        <span style={{ marginLeft: 12, fontWeight: 800 }}>Status: {isPublished ? "PUBLISHED" : "DRAFT"}</span>
-      </div>
-
-      {msg && <div style={{ marginBottom: 10 }}>{msg}</div>}
-
-      {isPublished && (
-        <div style={{ marginBottom: 10, color: "#666" }}>
-          Week total hours: <b>{weekTotalHours.toFixed(2)}h</b>
+            {actionButton("Refresh", loadMyShifts, { disabled: loading })}
+          </div>
         </div>
-      )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
-        {dayLabels.map((label, i) => {
-          const list = grid[i] ?? [];
-          return (
-            <div key={label} style={{ border: "1px solid #ddd", borderRadius: 14, padding: 12 }}>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>{label}</div>
-              <div style={{ fontSize: 12, color: "#444", marginTop: 2 }}>{fmtHeaderDate(dayDates[i])}</div>
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 16,
+            background: CARD_BG,
+            padding: 18,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-end",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Week range</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: TEXT }}>{weekRangeText(weekStart)}</div>
+            </div>
 
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {actionButton("← Prev Week", () => setWeekStart((w) => addDaysISO(w, -7)), {
+                disabled: loading,
+              })}
+              {actionButton("This Week", () => setWeekStart(getThisWeekThuISO()), {
+                primary: true,
+                disabled: loading,
+              })}
+              {actionButton("Next →", () => setWeekStart((w) => addDaysISO(w, 7)), {
+                disabled: loading,
+              })}
+            </div>
+          </div>
 
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+            {infoCard("Week start", weekStart)}
+            {infoCard("Week total hours", isPublished ? `${weekTotalHours.toFixed(2)}h` : "-")}
+            <div
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: "#F9FAFB",
+                border: `1px solid ${BORDER}`,
+                minWidth: 160,
+              }}
+            >
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Roster status</div>
+              {statusBadge(isPublished)}
+            </div>
+          </div>
+        </div>
 
-              <div style={{ marginTop: 10 }}>
+        {msg && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              background: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: TEXT,
+            }}
+          >
+            {msg}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 14,
+          }}
+        >
+          {dayLabels.map((label, i) => {
+            const list = grid[i] ?? [];
+            const dateISO = toISODate(dayDates[i]);
+            const isToday = isSameISODate(dateISO, todayISO);
+            const dayTotal = dailyTotals[i]?.hours ?? 0;
+
+            return (
+              <div
+                key={label}
+                style={{
+                  border: `1px solid ${isToday ? WAK_BLUE : BORDER}`,
+                  borderRadius: 16,
+                  padding: 14,
+                  background: isToday ? "#F7FBFF" : "#fff",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start" }}>
+                  <div>
+                    <div style={{ fontWeight: 900, fontSize: 16, color: TEXT }}>{label}</div>
+                    <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{fmtHeaderDate(dayDates[i])}</div>
+                  </div>
+
+                  {isToday && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        color: WAK_BLUE,
+                        background: "#EAF3FF",
+                        borderRadius: 999,
+                        padding: "5px 8px",
+                      }}
+                    >
+                      TODAY
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: 10, marginBottom: 12, fontSize: 12, color: MUTED }}>
+                  Day total: <b style={{ color: TEXT }}>{isPublished ? `${dayTotal.toFixed(2)}h` : "-"}</b>
+                </div>
+
                 {!isPublished ? (
-                  <div style={{ color: "#999" }}>Hidden until published</div>
+                  <div
+                    style={{
+                      color: "#999",
+                      border: "1px dashed #D1D5DB",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "#FAFAFA",
+                      fontSize: 14,
+                    }}
+                  >
+                    Hidden until published
+                  </div>
                 ) : list.length === 0 ? (
-                  <div style={{ color: "#999" }}>No shifts</div>
+                  <div
+                    style={{
+                      color: "#999",
+                      border: "1px dashed #D1D5DB",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "#FAFAFA",
+                      fontSize: 14,
+                    }}
+                  >
+                    No shifts
+                  </div>
                 ) : (
-                  list.map((r) => {
-                    const h = hoursBetween(r.shift_start, r.shift_end);
-                    return (
-                      <div key={r.id} style={{ padding: "10px 0", borderTop: "1px dashed #eee" }}>
-                        <div style={{ fontWeight: 900 }}>
-                          {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {list.map((r) => {
+                      const h = hoursBetween(r.shift_start, r.shift_end);
+                      return (
+                        <div
+                          key={r.id}
+                          style={{
+                            padding: 12,
+                            borderRadius: 12,
+                            border: `1px solid ${BORDER}`,
+                            background: "#FAFAFA",
+                          }}
+                        >
+                          <div style={{ fontWeight: 900, fontSize: 16, color: TEXT }}>
+                            {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
+                          </div>
+                          <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                            {h.toFixed(2)}h
+                          </div>
                         </div>
-                        <div style={{ fontSize: 12, color: "#666" }}>{h.toFixed(2)}h</div>
-                      </div>
-                    );
-                  })
+                      );
+                    })}
+                  </div>
                 )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

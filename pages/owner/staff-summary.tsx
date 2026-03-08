@@ -25,7 +25,7 @@ type TimeClock = {
 type Profile = {
   id: string;
   full_name: string | null;
-  role?: string | null; // OWNER / MANAGER / STAFF
+  role?: string | null;
   is_active?: boolean | null;
 };
 
@@ -37,6 +37,14 @@ type StaffPayRate = {
 };
 
 type DayType = "WEEKDAY" | "SATURDAY" | "SUNDAY";
+
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const WAK_BG = "#F5F6F8";
+const CARD_BG = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
 
 function money(n: number | null | undefined) {
   if (n === null || n === undefined || Number.isNaN(n)) return "-";
@@ -75,14 +83,81 @@ function todayDateInputValue() {
 
 function getDayTypeByISO(iso: string): DayType {
   const d = new Date(iso);
-  const day = d.getDay(); // Sun=0 ... Sat=6
+  const day = d.getDay();
   if (day === 0) return "SUNDAY";
   if (day === 6) return "SATURDAY";
   return "WEEKDAY";
 }
 
+function actionButton(
+  label: string,
+  onClick: () => void,
+  options?: { primary?: boolean; danger?: boolean; disabled?: boolean }
+) {
+  const primary = options?.primary;
+  const danger = options?.danger;
+  const disabled = options?.disabled;
+
+  let bg = "#fff";
+  let borderColor = BORDER;
+  let textColor = TEXT;
+
+  if (primary) {
+    bg = WAK_BLUE;
+    borderColor = WAK_BLUE;
+    textColor = "#fff";
+  }
+
+  if (danger) {
+    bg = WAK_RED;
+    borderColor = WAK_RED;
+    textColor = "#fff";
+  }
+
+  if (disabled) {
+    bg = "#D1D5DB";
+    borderColor = "#D1D5DB";
+    textColor = "#fff";
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "12px 16px",
+        minHeight: 44,
+        borderRadius: 12,
+        border: `1px solid ${borderColor}`,
+        background: bg,
+        color: textColor,
+        fontWeight: 800,
+        fontSize: 14,
+        cursor: disabled ? "not-allowed" : "pointer",
+        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function inputStyle(width?: number | string) {
+  return {
+    width: width ?? "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box" as const,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #D1D5DB",
+    fontSize: 14,
+    background: "#fff",
+    color: TEXT,
+  };
+}
+
 export default function OwnerStaffSummaryPage() {
-  // -------- Permission Gate (OWNER ONLY) --------
   const [authLoading, setAuthLoading] = useState(true);
   const [viewerRole, setViewerRole] = useState<string | null>(null);
 
@@ -120,12 +195,10 @@ export default function OwnerStaffSummaryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // -------- Filters --------
   const [fromDate, setFromDate] = useState<string>(todayDateInputValue());
   const [toDate, setToDate] = useState<string>(todayDateInputValue());
   const [selectedStaffId, setSelectedStaffId] = useState<string>("ALL");
 
-  // -------- Data --------
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -171,7 +244,6 @@ export default function OwnerStaffSummaryPage() {
     try {
       const { startISO, endISO } = buildRange(fromDate, toDate);
 
-      // clock window with buffer for matching
       const clockWindowStart = new Date(new Date(startISO).getTime() - 6 * 60 * 60 * 1000).toISOString();
       const clockWindowEnd = new Date(new Date(endISO).getTime() + 6 * 60 * 60 * 1000).toISOString();
 
@@ -223,7 +295,6 @@ export default function OwnerStaffSummaryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, viewerRole]);
 
-  // -------- Matching clock for each shift --------
   function findClockForShift(shift: Shift) {
     const byId = clocks.find((c) => c.shift_id === shift.id);
     if (byId) return byId;
@@ -253,7 +324,6 @@ export default function OwnerStaffSummaryPage() {
     return candidates[0];
   }
 
-  // -------- Payroll rule (Adjusted -> Raw -> Roster) --------
   function getPayrollMinutes(shift: Shift, clock: TimeClock | null) {
     const breakMin = shift.break_minutes ?? 0;
 
@@ -310,19 +380,15 @@ export default function OwnerStaffSummaryPage() {
     };
   }, [rows]);
 
-  // -------- Per staff summary --------
   type StaffAgg = {
     staff_id: string;
     staff_name: string;
-
     weekdayMin: number;
     saturdayMin: number;
     sundayMin: number;
-
     weekdayPay: number;
     saturdayPay: number;
     sundayPay: number;
-
     weekdayRate: number | null;
     saturdayRate: number | null;
     sundayRate: number | null;
@@ -341,15 +407,12 @@ export default function OwnerStaffSummaryPage() {
       map[staffId] = {
         staff_id: staffId,
         staff_name: staffLabel(staffId),
-
         weekdayMin: 0,
         saturdayMin: 0,
         sundayMin: 0,
-
         weekdayPay: 0,
         saturdayPay: 0,
         sundayPay: 0,
-
         weekdayRate,
         saturdayRate,
         sundayRate,
@@ -397,161 +460,410 @@ export default function OwnerStaffSummaryPage() {
     return list;
   }, [profiles]);
 
-  // -------- UI --------
-  if (authLoading) return <div style={{ padding: 20 }}>Loading permission...</div>;
+  const shownStaffCount = perStaffSummary.length;
+
+  if (authLoading) {
+    return (
+      <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 24,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <h1 style={{ margin: 0, color: TEXT }}>Payroll Summary</h1>
+            <div style={{ marginTop: 10, color: MUTED }}>Loading permission...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!isOwner) {
     return (
-      <div style={{ padding: 20 }}>
-        <h1>Staff Summary (hours & pay)</h1>
-        <div style={{ padding: 12, border: "1px solid #ddd", marginTop: 12 }}>
-          <b>Access denied.</b> This page is only for <b>Owner</b>.
-          <br />
-          Your role: <b>{viewerRole ?? "UNKNOWN"}</b>
+      <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+        <div style={{ maxWidth: 980, margin: "0 auto" }}>
+          <div style={{ marginBottom: 12 }}>
+            {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
+          </div>
+
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 24,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <h1 style={{ marginTop: 0, color: TEXT }}>Payroll Summary</h1>
+            <div
+              style={{
+                padding: 14,
+                border: `1px solid ${BORDER}`,
+                borderRadius: 12,
+                background: "#fff",
+                color: TEXT,
+              }}
+            >
+              <b>Access denied.</b> This page is only for <b>Owner</b>.
+              <br />
+              Your role: <b>{viewerRole ?? "UNKNOWN"}</b>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 20 }}>
-              <div style={{ marginBottom: 12 }}>
-        <button onClick={() => (window.location.href = "/staff/home")}>
-          ← Back to Home
-        </button>
-      </div>
-      <h1>Staff Payroll Summary (hours & pay)</h1>
-
-      {/* Filters */}
-      <div
-        style={{
-          display: "flex",
-          gap: 12,
-          alignItems: "end",
-          flexWrap: "wrap",
-          padding: 10,
-          border: "1px solid #ddd",
-          marginBottom: 12,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 12, color: "#666" }}>From</div>
-          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} disabled={loading} />
+    <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+        <div style={{ marginBottom: 12 }}>
+          {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
         </div>
 
-        <div>
-          <div style={{ fontSize: 12, color: "#666" }}>To (inclusive)</div>
-          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} disabled={loading} />
-        </div>
-
-        <div style={{ minWidth: 220 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Staff</div>
-          <select
-            value={selectedStaffId}
-            onChange={(e) => setSelectedStaffId(e.target.value)}
-            disabled={loading}
-            style={{ width: "100%" }}
-          >
-            <option value="ALL">All staff</option>
-            {staffOptions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <button onClick={fetchData} disabled={loading}>
-          Apply
-        </button>
-
-        <button
-          onClick={() => {
-            const t = todayDateInputValue();
-            setFromDate(t);
-            setToDate(t);
-            setSelectedStaffId("ALL");
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 20,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
           }}
-          disabled={loading}
         >
-          Reset
-        </button>
-
-        {loading && <span style={{ marginLeft: 8 }}>Loading...</span>}
-      </div>
-
-      {msg && <div style={{ padding: 10, border: "1px solid #ddd", marginBottom: 10 }}>{msg}</div>}
-
-      {/* Overall summary */}
-      <div style={{ padding: 10, border: "1px solid #ddd", marginBottom: 14 }}>
-        <b>Summary:</b>{" "}
-        <span style={{ marginLeft: 8 }}>
-          <b>{overallSummary.totalHours.toFixed(2)}</b> hours, <b>{money(overallSummary.totalPay)}</b>
-        </span>
-        <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-          Payroll time rule: <b>Adjusted</b> (if exists) → <b>Raw clock</b> → <b>Roster</b>.
+          <h1 style={{ margin: 0, color: TEXT }}>Payroll Summary</h1>
+          <div style={{ marginTop: 6, color: MUTED }}>
+            Owner-only payroll hours and pay overview
+          </div>
         </div>
-      </div>
 
-      {/* Per staff vertical summary */}
-      <div style={{ marginTop: 10 }}>
-        {perStaffSummary.length === 0 ? (
-          <div style={{ color: "#999" }}>No data.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {perStaffSummary.map((s) => {
-              const weekdayHours = round2(s.weekdayMin / 60);
-              const saturdayHours = round2(s.saturdayMin / 60);
-              const sundayHours = round2(s.sundayMin / 60);
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div style={{ marginBottom: 14 }}>
+            <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Filters</h2>
+            <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
+              Select a date range and optional staff filter, then apply.
+            </div>
+          </div>
 
-              const totalHours = round2((s.weekdayMin + s.saturdayMin + s.sundayMin) / 60);
-              const totalPay = round2(s.weekdayPay + s.saturdayPay + s.sundayPay);
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              alignItems: "end",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>From</div>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                disabled={loading}
+                style={inputStyle(170)}
+              />
+            </div>
 
-              return (
-                <div key={s.staff_id} style={{ border: "1px solid #ddd", padding: 10 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 8 }}>{s.staff_name}</div>
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>To (inclusive)</div>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                disabled={loading}
+                style={inputStyle(170)}
+              />
+            </div>
 
-                  <table style={{ width: 520, borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Type</th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Hours</th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Payrate</th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>Pay</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td style={{ padding: "6px 0" }}>Weekday</td>
-                        <td>{weekdayHours.toFixed(2)}</td>
-                        <td>{s.weekdayRate === null ? "-" : money(s.weekdayRate)}</td>
-                        <td>{money(s.weekdayPay)}</td>
-                      </tr>
-                      <tr>
-                        <td style={{ padding: "6px 0" }}>Saturday</td>
-                        <td>{saturdayHours.toFixed(2)}</td>
-                        <td>{s.saturdayRate === null ? "-" : money(s.saturdayRate)}</td>
-                        <td>{money(s.saturdayPay)}</td>
-                      </tr>
-                      <tr>
-                        <td style={{ padding: "6px 0" }}>Sunday</td>
-                        <td>{sundayHours.toFixed(2)}</td>
-                        <td>{s.sundayRate === null ? "-" : money(s.sundayRate)}</td>
-                        <td>{money(s.sundayPay)}</td>
-                      </tr>
-                      <tr>
-                        <td style={{ paddingTop: 8, fontWeight: 700 }}>Total</td>
-                        <td style={{ paddingTop: 8, fontWeight: 700 }}>{totalHours.toFixed(2)}</td>
-                        <td style={{ paddingTop: 8, fontWeight: 700 }}>-</td>
-                        <td style={{ paddingTop: 8, fontWeight: 700 }}>{money(totalPay)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })}
+            <div style={{ minWidth: 240 }}>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Staff</div>
+              <select
+                value={selectedStaffId}
+                onChange={(e) => setSelectedStaffId(e.target.value)}
+                disabled={loading}
+                style={inputStyle("100%")}
+              >
+                <option value="ALL">All staff</option>
+                {staffOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {actionButton("Apply", fetchData, { primary: true, disabled: loading })}
+            {actionButton(
+              "Reset",
+              () => {
+                const t = todayDateInputValue();
+                setFromDate(t);
+                setToDate(t);
+                setSelectedStaffId("ALL");
+              },
+              { disabled: loading }
+            )}
+
+            {loading && <span style={{ color: MUTED, fontWeight: 700 }}>Loading...</span>}
+          </div>
+        </div>
+
+        {msg && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              background: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: TEXT,
+            }}
+          >
+            {msg}
           </div>
         )}
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div style={{ marginBottom: 14 }}>
+            <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Overall Summary</h2>
+            <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
+              Payroll time rule: <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: "#F9FAFB",
+                border: `1px solid ${BORDER}`,
+                minWidth: 160,
+              }}
+            >
+              <div style={{ fontSize: 12, color: MUTED }}>Staff shown</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: TEXT }}>{shownStaffCount}</div>
+            </div>
+
+            <div
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: "#F9FAFB",
+                border: `1px solid ${BORDER}`,
+                minWidth: 160,
+              }}
+            >
+              <div style={{ fontSize: 12, color: MUTED }}>Total hours</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_BLUE }}>{overallSummary.totalHours.toFixed(2)}h</div>
+            </div>
+
+            <div
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: "#F9FAFB",
+                border: `1px solid ${BORDER}`,
+                minWidth: 160,
+              }}
+            >
+              <div style={{ fontSize: 12, color: MUTED }}>Total pay</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_RED }}>{money(overallSummary.totalPay)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          {perStaffSummary.length === 0 ? (
+            <div
+              style={{
+                border: `1px solid ${BORDER}`,
+                borderRadius: 18,
+                background: CARD_BG,
+                padding: 18,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+                color: MUTED,
+              }}
+            >
+              No data.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {perStaffSummary.map((s) => {
+                const weekdayHours = round2(s.weekdayMin / 60);
+                const saturdayHours = round2(s.saturdayMin / 60);
+                const sundayHours = round2(s.sundayMin / 60);
+
+                const totalHours = round2((s.weekdayMin + s.saturdayMin + s.sundayMin) / 60);
+                const totalPay = round2(s.weekdayPay + s.saturdayPay + s.sundayPay);
+
+                return (
+                  <div
+                    key={s.staff_id}
+                    style={{
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: 18,
+                      background: CARD_BG,
+                      padding: 18,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ fontWeight: 900, fontSize: 20, color: TEXT }}>{s.staff_name}</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <div
+                          style={{
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            background: "#F9FAFB",
+                            border: `1px solid ${BORDER}`,
+                            fontSize: 13,
+                            color: MUTED,
+                          }}
+                        >
+                          Total hours: <b style={{ color: TEXT }}>{totalHours.toFixed(2)}</b>
+                        </div>
+                        <div
+                          style={{
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            background: "#F9FAFB",
+                            border: `1px solid ${BORDER}`,
+                            fontSize: 13,
+                            color: MUTED,
+                          }}
+                        >
+                          Total pay: <b style={{ color: TEXT }}>{money(totalPay)}</b>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ overflowX: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          maxWidth: 620,
+                          borderCollapse: "separate",
+                          borderSpacing: 0,
+                        }}
+                      >
+                        <thead>
+                          <tr>
+                            {["Type", "Hours", "Payrate", "Pay"].map((head) => (
+                              <th
+                                key={head}
+                                style={{
+                                  textAlign: "left",
+                                  padding: "10px 10px",
+                                  borderBottom: `1px solid ${BORDER}`,
+                                  color: MUTED,
+                                  fontSize: 13,
+                                  background: "#FAFAFA",
+                                }}
+                              >
+                                {head}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              Weekday
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {weekdayHours.toFixed(2)}
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {s.weekdayRate === null ? "-" : money(s.weekdayRate)}
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {money(s.weekdayPay)}
+                            </td>
+                          </tr>
+
+                          <tr>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              Saturday
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {saturdayHours.toFixed(2)}
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {s.saturdayRate === null ? "-" : money(s.saturdayRate)}
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {money(s.saturdayPay)}
+                            </td>
+                          </tr>
+
+                          <tr>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              Sunday
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {sundayHours.toFixed(2)}
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {s.sundayRate === null ? "-" : money(s.sundayRate)}
+                            </td>
+                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
+                              {money(s.sundayPay)}
+                            </td>
+                          </tr>
+
+                          <tr>
+                            <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>Total</td>
+                            <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>
+                              {totalHours.toFixed(2)}
+                            </td>
+                            <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>-</td>
+                            <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>
+                              {money(totalPay)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

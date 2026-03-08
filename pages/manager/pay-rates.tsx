@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-type Profile = { id: string; full_name: string | null; role?: string | null; is_active?: boolean | null };
+type Profile = {
+  id: string;
+  full_name: string | null;
+  role?: string | null;
+  is_active?: boolean | null;
+};
 
 type RateRow = {
   staff_id: string;
@@ -13,15 +18,89 @@ type RateRow = {
 
 const DEFAULT_STORE_ID = "MOOROOLBARK";
 
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const WAK_BG = "#F5F6F8";
+const CARD_BG = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
+
+function actionButton(
+  label: string,
+  onClick: () => void,
+  options?: { primary?: boolean; danger?: boolean; disabled?: boolean }
+) {
+  const primary = options?.primary;
+  const danger = options?.danger;
+  const disabled = options?.disabled;
+
+  let bg = "#fff";
+  let borderColor = BORDER;
+  let textColor = TEXT;
+
+  if (primary) {
+    bg = WAK_BLUE;
+    borderColor = WAK_BLUE;
+    textColor = "#fff";
+  }
+
+  if (danger) {
+    bg = WAK_RED;
+    borderColor = WAK_RED;
+    textColor = "#fff";
+  }
+
+  if (disabled) {
+    bg = "#D1D5DB";
+    borderColor = "#D1D5DB";
+    textColor = "#fff";
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "12px 16px",
+        minHeight: 44,
+        borderRadius: 12,
+        border: `1px solid ${borderColor}`,
+        background: bg,
+        color: textColor,
+        fontWeight: 800,
+        fontSize: 14,
+        cursor: disabled ? "not-allowed" : "pointer",
+        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function inputStyle(width?: number | string, disabled?: boolean) {
+  return {
+    width: width ?? "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box" as const,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #D1D5DB",
+    fontSize: 14,
+    background: disabled ? "#F3F4F6" : "#fff",
+    color: TEXT,
+  };
+}
+
 export default function PayRatesPage() {
-  // permission
   const [authLoading, setAuthLoading] = useState(true);
   const [viewerRole, setViewerRole] = useState<string | null>(null);
   const [viewerId, setViewerId] = useState<string | null>(null);
 
   const isManagerOrOwner = viewerRole === "OWNER" || viewerRole === "MANAGER";
 
-  // data
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [rates, setRates] = useState<RateRow[]>([]);
   const [msg, setMsg] = useState("");
@@ -62,7 +141,6 @@ export default function PayRatesPage() {
     setLoading(true);
     setMsg("");
 
-    // 1) profiles
     const p = await supabase
       .from("profiles")
       .select("id, full_name, role, is_active")
@@ -76,14 +154,12 @@ export default function PayRatesPage() {
       return;
     }
 
-    // 只显示在职员工（你如果想显示离职员工我们再加开关）
     const activeProfiles = (p.data ?? []).filter(
       (x: any) => x?.is_active === undefined || x?.is_active === null || x?.is_active === true
     );
 
     setProfiles(activeProfiles as any);
 
-    // 2) pay rates（单店：固定用 DEFAULT_STORE_ID）
     const r = await supabase
       .from("staff_pay_rates")
       .select("staff_id, store_id, weekday_rate, saturday_rate, sunday_rate")
@@ -97,6 +173,7 @@ export default function PayRatesPage() {
     }
 
     const toNum = (v: any) => Number(v ?? 0);
+
     setRates(
       (r.data ?? []).map((x: any) => ({
         staff_id: x.staff_id,
@@ -166,7 +243,7 @@ export default function PayRatesPage() {
 
     const payload: any = {
       staff_id: staffId,
-      store_id: DEFAULT_STORE_ID, // 单店固定
+      store_id: DEFAULT_STORE_ID,
       weekday_rate: Number(row.weekday_rate),
       saturday_rate: Number(row.saturday_rate),
       sunday_rate: Number(row.sunday_rate),
@@ -174,7 +251,6 @@ export default function PayRatesPage() {
       updated_at: new Date().toISOString(),
     };
 
-    // 你的表目前看起来是 staff_id 唯一（你原来就这样写），我们保持一致
     const res = await supabase.from("staff_pay_rates").upsert(payload, {
       onConflict: "staff_id",
     } as any);
@@ -188,99 +264,283 @@ export default function PayRatesPage() {
     await load();
   }
 
-  // -------- UI --------
-  if (authLoading) return <div style={{ padding: 20 }}>Loading permission...</div>;
+  const activeStaffCount = profiles.length;
+  const configuredCount = profiles.filter((p) => !!getRate(p.id)).length;
+
+  if (authLoading) {
+    return (
+      <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+        <div style={{ maxWidth: 1080, margin: "0 auto" }}>
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 24,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <h1 style={{ margin: 0, color: TEXT }}>Pay Rates</h1>
+            <div style={{ marginTop: 10, color: MUTED }}>Loading permission...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!isManagerOrOwner) {
     return (
-      <div style={{ padding: 20 }}>
-        <h1>Manager — Staff Pay Rates</h1>
-        <div style={{ padding: 12, border: "1px solid #ddd", marginTop: 12 }}>
-          <b>Access denied.</b> This page is only for <b>Owner / Manager</b>.
-          <br />
-          Your role: <b>{viewerRole ?? "UNKNOWN"}</b>
+      <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+        <div style={{ maxWidth: 980, margin: "0 auto" }}>
+          <div style={{ marginBottom: 12 }}>
+            {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
+          </div>
+
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 24,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <h1 style={{ marginTop: 0, color: TEXT }}>Pay Rates</h1>
+            <div
+              style={{
+                padding: 14,
+                border: `1px solid ${BORDER}`,
+                borderRadius: 12,
+                background: "#fff",
+                color: TEXT,
+              }}
+            >
+              <b>Access denied.</b> This page is only for <b>Owner / Manager</b>.
+              <br />
+              Your role: <b>{viewerRole ?? "UNKNOWN"}</b>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 20 }}>
-            <div style={{ marginBottom: 12 }}>
-        <button onClick={() => (window.location.href = "/staff/home")}>
-          ← Back to Home
-        </button>
-      </div>
-      <h1>Manager — Staff Pay Rates</h1>
+    <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
+        <div style={{ marginBottom: 12 }}>
+          {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
+        </div>
 
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={load} disabled={loading}>
-          Refresh
-        </button>
-        {loading && <span style={{ marginLeft: 10 }}>Loading...</span>}
-      </div>
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 20,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <h1 style={{ margin: 0, color: TEXT }}>Pay Rates</h1>
+        </div>
 
-      {msg && <p>{msg}</p>}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "#F9FAFB",
+              border: `1px solid ${BORDER}`,
+              minWidth: 160,
+            }}
+          >
+            <div style={{ fontSize: 12, color: MUTED }}>Store</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: TEXT }}>{DEFAULT_STORE_ID}</div>
+          </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table cellPadding={8} style={{ borderCollapse: "collapse", minWidth: 800 }}>
-          <thead>
-            <tr>
-              <th style={{ border: "1px solid #ccc" }}>Staff</th>
-              <th style={{ border: "1px solid #ccc" }}>Weekday rate</th>
-              <th style={{ border: "1px solid #ccc" }}>Saturday rate</th>
-              <th style={{ border: "1px solid #ccc" }}>Sunday rate</th>
-              <th style={{ border: "1px solid #ccc" }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {profiles.map((p) => {
-              const r = getRate(p.id) ?? {
-                staff_id: p.id,
-                store_id: DEFAULT_STORE_ID,
-                weekday_rate: 0,
-                saturday_rate: 0,
-                sunday_rate: 0,
-              };
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "#F9FAFB",
+              border: `1px solid ${BORDER}`,
+              minWidth: 160,
+            }}
+          >
+            <div style={{ fontSize: 12, color: MUTED }}>Active staff</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: WAK_BLUE }}>{activeStaffCount}</div>
+          </div>
 
-              return (
-                <tr key={p.id}>
-                  <td style={{ border: "1px solid #ccc", fontWeight: 700 }}>{nameOf(p.id)}</td>
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "#F9FAFB",
+              border: `1px solid ${BORDER}`,
+              minWidth: 160,
+            }}
+          >
+            <div style={{ fontSize: 12, color: MUTED }}>Rates loaded</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: WAK_RED }}>{configuredCount}</div>
+          </div>
+        </div>
 
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <input
-                      value={r.weekday_rate}
-                      onChange={(e) => setLocalRate(p.id, { weekday_rate: Number(e.target.value) })}
-                      style={{ width: 120 }}
-                    />
-                  </td>
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {actionButton("Refresh", load, { primary: true, disabled: loading })}
+            {loading && <span style={{ color: MUTED, fontWeight: 700 }}>Loading...</span>}
+          </div>
+        </div>
 
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <input
-                      value={r.saturday_rate}
-                      onChange={(e) => setLocalRate(p.id, { saturday_rate: Number(e.target.value) })}
-                      style={{ width: 120 }}
-                    />
-                  </td>
+        {msg && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              background: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: TEXT,
+            }}
+          >
+            {msg}
+          </div>
+        )}
 
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <input
-                      value={r.sunday_rate}
-                      onChange={(e) => setLocalRate(p.id, { sunday_rate: Number(e.target.value) })}
-                      style={{ width: 120 }}
-                    />
-                  </td>
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div style={{ marginBottom: 14 }}>
+            <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Staff Rates</h2>
+          </div>
 
-                  <td style={{ border: "1px solid #ccc" }}>
-                    <button onClick={() => save(p.id)} disabled={loading}>
-                      Save
-                    </button>
-                  </td>
+          <div style={{ overflowX: "auto" }}>
+            <table
+              cellPadding={0}
+              style={{
+                width: "100%",
+                borderCollapse: "separate",
+                borderSpacing: 0,
+                minWidth: 860,
+              }}
+            >
+              <thead>
+                <tr>
+                  {["Staff", "Weekday rate", "Saturday rate", "Sunday rate", "Action"].map((head) => (
+                    <th
+                      key={head}
+                      style={{
+                        textAlign: "left",
+                        padding: "14px 12px",
+                        borderBottom: `1px solid ${BORDER}`,
+                        color: MUTED,
+                        fontSize: 13,
+                        background: "#FAFAFA",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {head}
+                    </th>
+                  ))}
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+
+              <tbody>
+                {profiles.map((p) => {
+                  const r = getRate(p.id) ?? {
+                    staff_id: p.id,
+                    store_id: DEFAULT_STORE_ID,
+                    weekday_rate: 0,
+                    saturday_rate: 0,
+                    sunday_rate: 0,
+                  };
+
+                  return (
+                    <tr key={p.id}>
+                      <td
+                        style={{
+                          padding: "14px 12px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          fontWeight: 700,
+                          color: TEXT,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {nameOf(p.id)}
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={r.weekday_rate}
+                          onChange={(e) => setLocalRate(p.id, { weekday_rate: Number(e.target.value) })}
+                          style={inputStyle(140)}
+                        />
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={r.saturday_rate}
+                          onChange={(e) => setLocalRate(p.id, { saturday_rate: Number(e.target.value) })}
+                          style={inputStyle(140)}
+                        />
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={r.sunday_rate}
+                          onChange={(e) => setLocalRate(p.id, { sunday_rate: Number(e.target.value) })}
+                          style={inputStyle(140)}
+                        />
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "14px 12px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {actionButton("Save", () => save(p.id), {
+                          primary: true,
+                          disabled: loading,
+                        })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop: 12, fontSize: 12, color: MUTED }}>
+            Rates support decimal values up to 2 decimal places.
+          </div>
+        </div>
       </div>
     </div>
   );

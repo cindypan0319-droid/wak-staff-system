@@ -14,9 +14,14 @@ async function downloadExcel(type: string, start: string, end: string) {
     return;
   }
 
-  const resp = await fetch(`/api/owner/export.xlsx?type=${encodeURIComponent(type)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const resp = await fetch(
+    `/api/owner/export.xlsx?type=${encodeURIComponent(type)}&start=${encodeURIComponent(
+      start
+    )}&end=${encodeURIComponent(end)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
 
   if (!resp.ok) {
     const txt = await resp.text();
@@ -33,6 +38,99 @@ async function downloadExcel(type: string, start: string, end: string) {
   a.click();
   a.remove();
   window.URL.revokeObjectURL(url);
+}
+
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const WAK_BG = "#F5F6F8";
+const CARD_BG = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
+
+function actionButton(
+  label: string,
+  onClick: () => void,
+  options?: { primary?: boolean; danger?: boolean; disabled?: boolean }
+) {
+  const primary = options?.primary;
+  const danger = options?.danger;
+  const disabled = options?.disabled;
+
+  let bg = "#fff";
+  let borderColor = BORDER;
+  let textColor = TEXT;
+
+  if (primary) {
+    bg = WAK_BLUE;
+    borderColor = WAK_BLUE;
+    textColor = "#fff";
+  }
+
+  if (danger) {
+    bg = WAK_RED;
+    borderColor = WAK_RED;
+    textColor = "#fff";
+  }
+
+  if (disabled) {
+    bg = "#D1D5DB";
+    borderColor = "#D1D5DB";
+    textColor = "#fff";
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "12px 16px",
+        minHeight: 44,
+        borderRadius: 12,
+        border: `1px solid ${borderColor}`,
+        background: bg,
+        color: textColor,
+        fontWeight: 800,
+        fontSize: 14,
+        cursor: disabled ? "not-allowed" : "pointer",
+        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function inputStyle(width?: number | string) {
+  return {
+    width: width ?? "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box" as const,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #D1D5DB",
+    fontSize: 14,
+    background: "#fff",
+    color: TEXT,
+  };
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        borderRadius: 12,
+        background: "#F9FAFB",
+        border: `1px solid ${BORDER}`,
+        minWidth: 180,
+      }}
+    >
+      <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
+      <div style={{ fontWeight: 800, fontSize: 18, color: TEXT, marginTop: 4 }}>{value}</div>
+    </div>
+  );
 }
 
 export default function OwnerInvoicesPage() {
@@ -56,7 +154,6 @@ export default function OwnerInvoicesPage() {
   async function fetchAll(s = startDate, e = endDate) {
     setLoading(true);
 
-    // 1) list rows
     const { data: list, error: listErr } = await supabase.rpc("owner_invoices_list", {
       start_date: s,
       end_date: e,
@@ -72,7 +169,6 @@ export default function OwnerInvoicesPage() {
     }
     setRows(list || []);
 
-    // 2) stats bar
     const { data: st, error: stErr } = await supabase.rpc("owner_invoices_stats", {
       start_date: s,
       end_date: e,
@@ -124,140 +220,214 @@ export default function OwnerInvoicesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady]);
 
-  if (checkingAuth) return <div style={{ padding: 30 }}>Checking...</div>;
+  if (checkingAuth) {
+    return (
+      <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 24,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <h1 style={{ margin: 0, color: TEXT }}>Invoices</h1>
+            <div style={{ marginTop: 10, color: MUTED }}>Checking...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: 30 }}>
-      <h1>Invoices</h1>
-
-      <div style={{ marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <div>
-          <div style={label}>Start</div>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+    <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
+      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+        <div style={{ marginBottom: 12 }}>
+          {actionButton("← Back to Dashboard", () => router.push("/owner/dashboard"))}
         </div>
 
-        <div>
-          <div style={label}>End</div>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-        </div>
-
-        <button onClick={() => fetchAll(startDate, endDate)} style={{ height: 32, marginTop: 18 }}>
-          Apply
-        </button>
-
-        <button
-          onClick={() => downloadExcel("invoices", startDate, endDate)}
-          style={{ height: 32, marginTop: 18 }}
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 20,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
         >
-          Export Excel
-        </button>
+          <h1 style={{ margin: 0, color: TEXT }}>Invoices</h1>
+        </div>
 
-        <button onClick={() => router.push("/owner/dashboard")} style={{ height: 32, marginTop: 18 }}>
-          ← Back
-        </button>
-      </div>
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            marginBottom: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              alignItems: "end",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Start</div>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                style={inputStyle(170)}
+              />
+            </div>
 
-      {/* Stats Bar */}
-      {stats ? (
-        <div style={statsBox}>
-          <div><b>Invoices:</b> {stats.invoice_count}</div>
-          <div><b>Total Amount:</b> ${Number(stats.total_amount || 0).toFixed(2)}</div>
-          <div><b>Total Tax:</b> ${Number(stats.total_tax || 0).toFixed(2)}</div>
-          <div>
-            <b>Top Supplier:</b> {stats.top_supplier || "-"} (${Number(stats.top_supplier_amount || 0).toFixed(2)})
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>End</div>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                style={inputStyle(170)}
+              />
+            </div>
+
+            {actionButton("Apply", () => fetchAll(startDate, endDate), { primary: true })}
+            {actionButton("Export Excel", () => downloadExcel("invoices", startDate, endDate))}
+            {actionButton("Back", () => router.push("/owner/dashboard"))}
           </div>
-          <div>
-            <b>Top Category:</b> {stats.top_category || "-"} (${Number(stats.top_category_amount || 0).toFixed(2)})
+        </div>
+
+        {stats ? (
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              flexWrap: "wrap",
+              marginBottom: 16,
+            }}
+          >
+            <StatCard label="Invoices" value={String(stats.invoice_count ?? 0)} />
+            <StatCard label="Total Amount" value={`$${Number(stats.total_amount || 0).toFixed(2)}`} />
+            <StatCard label="Total Tax" value={`$${Number(stats.total_tax || 0).toFixed(2)}`} />
+            <StatCard
+              label="Top Supplier"
+              value={`${stats.top_supplier || "-"} ($${Number(stats.top_supplier_amount || 0).toFixed(2)})`}
+            />
+            <StatCard
+              label="Top Category"
+              value={`${stats.top_category || "-"} ($${Number(stats.top_category_amount || 0).toFixed(2)})`}
+            />
           </div>
+        ) : (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              background: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: MUTED,
+            }}
+          >
+            Stats unavailable (no data or error).
+          </div>
+        )}
+
+        <div
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            padding: 18,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          {loading ? (
+            <div style={{ color: MUTED }}>Loading...</div>
+          ) : (
+            <>
+              <div style={{ overflowX: "auto", border: `1px solid ${BORDER}`, borderRadius: 12 }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "separate",
+                    borderSpacing: 0,
+                    minWidth: 900,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: "#FAFAFA" }}>
+                      <th style={th}>Date</th>
+                      <th style={th}>Supplier</th>
+                      <th style={th}>Invoice #</th>
+                      <th style={th}>Category</th>
+                      <th style={th}>Amount</th>
+                      <th style={th}>Tax</th>
+                      <th style={th}>Action</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={r.id}>
+                        <td style={td}>{r.invoice_date}</td>
+                        <td style={{ ...td, fontWeight: 700 }}>{r.supplier_name || ""}</td>
+                        <td style={td}>{r.invoice_number || ""}</td>
+                        <td style={td}>{r.category || ""}</td>
+                        <td style={td}>${Number(r.amount || 0).toFixed(2)}</td>
+                        <td style={td}>${Number(r.tax || 0).toFixed(2)}</td>
+                        <td style={td}>
+                          {actionButton("Edit", () =>
+                            router.push(
+                              `/owner/invoices/${r.id}?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`
+                            )
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {rows.length === 0 ? (
+                      <tr>
+                        <td style={td} colSpan={7}>
+                          No invoices in this range.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ marginTop: 12, fontSize: 12, color: MUTED }}>
+                Showing up to 500 rows in the table. Stats uses full DB aggregate.
+              </div>
+            </>
+          )}
         </div>
-      ) : (
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
-          Stats unavailable (no data or error).
-        </div>
-      )}
-
-      {loading ? (
-        <p>Loading...</p>
-      ) : (
-        <div style={{ overflowX: "auto", border: "1px solid #eee", borderRadius: 8 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#f8fafc" }}>
-                <th style={th}>Date</th>
-                <th style={th}>Supplier</th>
-                <th style={th}>Invoice #</th>
-                <th style={th}>Category</th>
-                <th style={th}>Amount</th>
-                <th style={th}>Tax</th>
-                <th style={th}>Action</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td style={td}>{r.invoice_date}</td>
-                  <td style={td}>{r.supplier_name || ""}</td>
-                  <td style={td}>{r.invoice_number || ""}</td>
-                  <td style={td}>{r.category || ""}</td>
-                  <td style={td}>${Number(r.amount || 0).toFixed(2)}</td>
-                  <td style={td}>${Number(r.tax || 0).toFixed(2)}</td>
-                  <td style={td}>
-                    <button
-                      onClick={() =>
-                        router.push(
-                          `/owner/invoices/${r.id}?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`
-                        )
-                      }
-                    >
-                      Edit
-                    </button>
-                  </td>
-                </tr>
-              ))}
-
-              {rows.length === 0 ? (
-                <tr>
-                  <td style={td} colSpan={7}>
-                    No invoices in this range.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-        Showing up to 500 rows (table). Stats uses full DB aggregate.
       </div>
     </div>
   );
 }
 
-const label: React.CSSProperties = { fontSize: 12, color: "#64748b", marginBottom: 4 };
-
-const statsBox: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 10,
-  padding: 12,
-  marginBottom: 12,
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-  gap: 8,
-  background: "#fff",
-};
-
 const th: React.CSSProperties = {
   textAlign: "left",
-  padding: "10px 12px",
-  borderBottom: "1px solid #eee",
+  padding: "12px 12px",
+  borderBottom: `1px solid ${BORDER}`,
   fontSize: 13,
-  color: "#334155",
+  color: MUTED,
+  whiteSpace: "nowrap",
 };
 
 const td: React.CSSProperties = {
-  padding: "10px 12px",
-  borderBottom: "1px solid #f1f5f9",
+  padding: "12px 12px",
+  borderBottom: `1px solid ${BORDER}`,
   fontSize: 13,
+  color: TEXT,
 };

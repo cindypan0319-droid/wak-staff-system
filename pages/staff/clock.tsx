@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabaseClient";
+import { theme } from "../../lib/theme";
 
 type Role = "OWNER" | "MANAGER" | "STAFF" | "INACTIVE" | "ANON" | string;
 
@@ -14,8 +15,23 @@ type TimeClockRow = {
   created_at: string;
 };
 
+type ProfileRow = {
+  full_name: string | null;
+  preferred_name: string | null;
+  role: Role | null;
+  is_active: boolean | null;
+};
+
+function displayName(profile: ProfileRow | null) {
+  if (!profile) return "Unknown";
+  const preferred = (profile.preferred_name ?? "").trim();
+  const full = (profile.full_name ?? "").trim();
+  return preferred || full || "Unknown";
+}
+
 export default function StaffClockPage() {
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string>("Unknown");
   const [role, setRole] = useState<Role>("ANON");
   const [msg, setMsg] = useState<string>("");
 
@@ -28,66 +44,67 @@ export default function StaffClockPage() {
 
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
-      setUserEmail(session?.user?.email ?? null);
+      setUserId(session?.user?.id ?? null);
       setMsg("");
     });
 
     supabase.auth.getSession().then(({ data }) => {
-      setUserEmail(data.session?.user?.email ?? null);
+      setUserId(data.session?.user?.id ?? null);
     });
 
     return () => sub.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    async function loadRole() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const uid = sessionData.session?.user?.id;
-      if (!uid) {
+    async function loadProfile() {
+      if (!userId) {
         setRole("ANON");
+        setUserName("Unknown");
         return;
       }
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("role, is_active")
-        .eq("id", uid)
+        .select("full_name, preferred_name, role, is_active")
+        .eq("id", userId)
         .maybeSingle();
 
       if (error) {
         console.log("profiles load error:", error);
         setRole("ANON");
+        setUserName("Unknown");
         return;
       }
 
-      if (!data?.is_active) {
+      const profile = (data as ProfileRow | null) ?? null;
+
+      setUserName(displayName(profile));
+
+      if (!profile?.is_active) {
         setRole("INACTIVE");
         return;
       }
 
-      setRole((data?.role as Role) ?? "ANON");
+      setRole((profile?.role as Role) ?? "ANON");
     }
 
-    loadRole();
-  }, [userEmail]);
+    loadProfile();
+  }, [userId]);
 
   async function refresh() {
     setMsg("");
     setLoading(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const uid = sessionData.session?.user?.id;
-      if (!uid) {
+      if (!userId) {
         setOpenShift(null);
         setMsg("Not logged in.");
         return;
       }
 
-      // ✅ Find current open shift (clock_out_at is null) for this user
       const { data, error } = await supabase
         .from("time_clock")
         .select("*")
-        .eq("staff_id", uid)
+        .eq("staff_id", userId)
         .is("clock_out_at", null)
         .order("clock_in_at", { ascending: false })
         .limit(1)
@@ -100,7 +117,7 @@ export default function StaffClockPage() {
         return;
       }
 
-      setOpenShift((data as any) ?? null);
+      setOpenShift((data as TimeClockRow | null) ?? null);
     } finally {
       setLoading(false);
     }
@@ -109,27 +126,24 @@ export default function StaffClockPage() {
   useEffect(() => {
     if (canUseClock) refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canUseClock]);
+  }, [canUseClock, userId]);
 
   async function clockIn() {
     setMsg("");
     setLoading(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const uid = sessionData.session?.user?.id;
-      if (!uid) {
+      if (!userId) {
         setMsg("Not logged in.");
         return;
       }
 
-      // prevent double clock-in if already on shift
       if (openShift) {
         setMsg("You are already clocked in.");
         return;
       }
 
       const payload = {
-        staff_id: uid,
+        staff_id: userId,
         shift_id: null as any,
         clock_in_at: new Date().toISOString(),
         clock_out_at: null,
@@ -178,7 +192,7 @@ export default function StaffClockPage() {
     }
   }
 
-  if (!userEmail) {
+  if (!userId) {
     return (
       <div style={{ padding: 20 }}>
         <h1>Time Clock</h1>
@@ -191,44 +205,129 @@ export default function StaffClockPage() {
   const statusLabel = openShift ? "ON SHIFT" : "OFF SHIFT";
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Time Clock</h1>
+    <div style={{ padding: 20, background: theme.colors.background, minHeight: "100vh" }}>
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <h1 style={{ marginBottom: 10 }}>Time Clock</h1>
 
-      <div style={{ marginBottom: 8 }}>
-        Logged in as: <b>{userEmail}</b> | Role: <b>{role}</b>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
-        <Link href="/staff/home">
-          <button>Back to Home</button>
-        </Link>
-
-      </div>
-
-      <hr style={{ margin: "16px 0" }} />
-
-      {!canUseClock ? (
-        <p>You do not have access to Time Clock.</p>
-      ) : (
-        <div style={{ maxWidth: 520 }}>
-          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 16, background: "#fafafa" }}>
-            <div style={{ marginBottom: 12 }}>
-              Status: <b style={{ color: openShift ? "#0a0" : "#888" }}>{statusLabel}</b>
-            </div>
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={clockIn} disabled={loading || !!openShift}>
-                Clock In
-              </button>
-              <button onClick={clockOut} disabled={loading || !openShift}>
-                Clock Out
-              </button>
-            </div>
-          </div>
+        <div
+          style={{
+            marginBottom: 14,
+            fontSize: 15,
+            color: "#333",
+            background: "#fff",
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            padding: "12px 14px",
+          }}
+        >
+          Logged in as: <b>{userName}</b> | Role: <b>{role}</b>
         </div>
-      )}
 
-      {msg && <p style={{ marginTop: 12 }}>{msg}</p>}
+        <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+          <Link href="/staff/home">
+            <button
+              style={{
+                padding: "10px 16px",
+                borderRadius: 8,
+                border: "1px solid #d1d5db",
+                background: "#fff",
+                cursor: "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Back to Home
+            </button>
+          </Link>
+        </div>
+
+        <div
+          style={{
+            maxWidth: 560,
+            border: "1px solid #e5e7eb",
+            borderRadius: 16,
+            padding: 22,
+            background: "#ffffff",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.06)",
+          }}
+        >
+          <div
+            style={{
+              marginBottom: 18,
+              fontSize: 18,
+              fontWeight: 700,
+            }}
+          >
+            Status:{" "}
+            <span
+              style={{
+                color: openShift ? "#15803d" : "#6b7280",
+              }}
+            >
+              {statusLabel}
+            </span>
+          </div>
+
+          {!canUseClock ? (
+            <p style={{ margin: 0 }}>You do not have access to Time Clock.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <button
+                onClick={clockIn}
+                disabled={loading || !!openShift}
+                style={{
+                  width: "100%",
+                  padding: "18px 20px",
+                  fontSize: 22,
+                  fontWeight: 800,
+                  borderRadius: 14,
+                  border: "none",
+                  background: loading || !!openShift ? "#93c5fd" : theme.colors.primary,
+                  color: "#fff",
+                  cursor: loading || !!openShift ? "not-allowed" : "pointer",
+                  boxShadow: "0 6px 16px rgba(37,99,235,0.25)",
+                }}
+              >
+                {loading && !openShift ? "Processing..." : "CLOCK IN"}
+              </button>
+
+              <button
+                onClick={clockOut}
+                disabled={loading || !openShift}
+                style={{
+                  width: "100%",
+                  padding: "18px 20px",
+                  fontSize: 22,
+                  fontWeight: 800,
+                  borderRadius: 14,
+                  border: "none",
+                  background: loading || !openShift ? "#fca5a5" : theme.colors.danger,
+                  color: "#fff",
+                  cursor: loading || !openShift ? "not-allowed" : "pointer",
+                  boxShadow: "0 6px 16px rgba(220,38,38,0.22)",
+                }}
+              >
+                {loading && !!openShift ? "Processing..." : "CLOCK OUT"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {msg && (
+          <div
+            style={{
+              marginTop: 14,
+              maxWidth: 560,
+              padding: "12px 14px",
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 10,
+              color: "#333",
+            }}
+          >
+            {msg}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

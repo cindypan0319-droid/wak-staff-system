@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 const DEFAULT_STORE_ID = "MOOROOLBARK";
 const DEFAULT_FLOAT_IF_NO_MORNING = 400;
 const EPS = 0.01;
+
+const WAK_BLUE = "#1E5A9E";
+const WAK_RED = "#ED1C24";
+const WAK_BG = "#F5F6F8";
+const CARD_BG = "#FFFFFF";
+const BORDER = "#E5E7EB";
+const TEXT = "#111827";
+const MUTED = "#6B7280";
 
 type Platform = {
   id: number;
@@ -66,7 +74,6 @@ function money(n: number) {
 function parseMoneyOrZero(raw: string | undefined | null) {
   const s = String(raw ?? "").trim();
   if (!s) return 0;
-  // allow "10", "10.5", "10.50"
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 }
@@ -79,7 +86,6 @@ function parseIntOrNull(raw: string) {
 }
 
 function countsToStoredJson(c: CashCounts) {
-  // store as numbers (0 if null) so DB has stable format
   const out: any = {};
   for (const k of Object.keys(c) as (keyof CashCounts)[]) {
     out[k] = Number.isFinite(Number(c[k])) ? Number(c[k]) : 0;
@@ -92,7 +98,6 @@ function storedJsonToCounts(obj: any): CashCounts {
   for (const k of Object.keys(emptyCounts) as (keyof CashCounts)[]) {
     const v = obj?.[k];
     const n = Number(v);
-    // If stored is 0, we want blank UI (null). If stored is >0, show number.
     out[k] = Number.isFinite(n) && n > 0 ? n : null;
   }
   return out as CashCounts;
@@ -116,41 +121,51 @@ function calcTotal(c: CashCounts) {
   );
 }
 
+const denomFields: { label: string; key: keyof CashCounts }[] = [
+  { label: "$100 notes", key: "note100" },
+  { label: "$50 notes", key: "note50" },
+  { label: "$20 notes", key: "note20" },
+  { label: "$10 notes", key: "note10" },
+  { label: "$5 notes", key: "note5" },
+  { label: "$2 coins", key: "coin2" },
+  { label: "$1 coins", key: "coin1" },
+  { label: "50c coins", key: "coin50c" },
+  { label: "20c coins", key: "coin20c" },
+  { label: "10c coins", key: "coin10c" },
+  { label: "5c coins", key: "coin5c" },
+];
+
 export default function DailyEntryPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  // Date (both morning & night use this date)
   const [date, setDate] = useState(todayDateInputValue());
 
-  // Platforms
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [platformGrossText, setPlatformGrossText] = useState<Record<string, string>>({});
 
-  // Instore sales (text so it can be blank + decimals)
   const [cashSalesText, setCashSalesText] = useState<string>("");
   const [eftposSalesText, setEftposSalesText] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
 
-  // Morning cashup counts
   const [morningCounts, setMorningCounts] = useState<CashCounts>({ ...emptyCounts });
-
-  // Night cashup counts
   const [nightCounts, setNightCounts] = useState<CashCounts>({ ...emptyCounts });
-
-  // Removed cash counts (NEW)
   const [removedCounts, setRemovedCounts] = useState<CashCounts>({ ...emptyCounts });
 
-  // Reason (when POS cash sales != should remove)
   const [cashDiffReason, setCashDiffReason] = useState<CashDiffReason>("");
   const [cashDiffNote, setCashDiffNote] = useState<string>("");
+
+  const [hasMorningRecord, setHasMorningRecord] = useState(false);
+
+  const [morningDirty, setMorningDirty] = useState(false);
+  const [closingDirty, setClosingDirty] = useState(false);
+
+  const initialLoadDoneRef = useRef(false);
 
   const morningTotal = useMemo(() => calcTotal(morningCounts), [morningCounts]);
   const nightTotal = useMemo(() => calcTotal(nightCounts), [nightCounts]);
   const removedTotal = useMemo(() => calcTotal(removedCounts), [removedCounts]);
 
-  // If no morning saved record, we use default float 400 as baseline
-  const [hasMorningRecord, setHasMorningRecord] = useState(false);
   const baselineMorningTotal = useMemo(
     () => (hasMorningRecord ? morningTotal : DEFAULT_FLOAT_IF_NO_MORNING),
     [hasMorningRecord, morningTotal]
@@ -181,10 +196,19 @@ export default function DailyEntryPage() {
   function setCountsField(
     setter: (fn: (prev: CashCounts) => CashCounts) => void,
     key: keyof CashCounts,
-    raw: string
+    raw: string,
+    section: "morning" | "closing"
   ) {
     const n = parseIntOrNull(raw);
     setter((prev) => ({ ...prev, [key]: n }));
+    if (initialLoadDoneRef.current) {
+      if (section === "morning") setMorningDirty(true);
+      else setClosingDirty(true);
+    }
+  }
+
+  function markClosingDirty() {
+    if (initialLoadDoneRef.current) setClosingDirty(true);
   }
 
   async function loadPlatforms() {
@@ -206,11 +230,11 @@ export default function DailyEntryPage() {
   async function loadExisting() {
     setLoading(true);
     setMsg("");
+    initialLoadDoneRef.current = false;
 
     try {
       await loadPlatforms();
 
-      // 1) daily_sales
       const ds = await supabase
         .from("daily_sales")
         .select("business_date, cash_sales, eftpos_sales, notes")
@@ -218,17 +242,18 @@ export default function DailyEntryPage() {
         .eq("store_id", DEFAULT_STORE_ID)
         .maybeSingle();
 
-      if (ds.error && ds.error.code !== "PGRST116") setMsg("❌ Cannot load instore sales: " + ds.error.message);
+      if (ds.error && ds.error.code !== "PGRST116") {
+        setMsg("❌ Cannot load instore sales: " + ds.error.message);
+      }
 
       const row = ds.data as any;
       const cashVal = row?.cash_sales;
       const eftVal = row?.eftpos_sales;
 
-      setCashSalesText(cashVal == null ? "" : String(cashVal));
-      setEftposSalesText(eftVal == null ? "" : String(eftVal));
+      setCashSalesText(cashVal == null || Number(cashVal) === 0 ? "" : String(cashVal));
+      setEftposSalesText(eftVal == null || Number(eftVal) === 0 ? "" : String(eftVal));
       setNotes(row?.notes ?? "");
 
-      // 2) platform_income (gross only)
       const pi = await supabase
         .from("platform_income")
         .select("business_date, platform, gross_income")
@@ -242,12 +267,11 @@ export default function DailyEntryPage() {
         for (const r of pi.data ?? []) {
           const p = String((r as any).platform);
           const g = (r as any).gross_income;
-          map[p] = g == null ? "" : String(g);
+          map[p] = g == null || Number(g) === 0 ? "" : String(g);
         }
         setPlatformGrossText(map);
       }
 
-      // 3) morning cashup
       const m = await supabase
         .from("cashup_sessions")
         .select("counts")
@@ -268,7 +292,6 @@ export default function DailyEntryPage() {
         setMorningCounts({ ...emptyCounts });
       }
 
-      // 4) night cashup
       const n = await supabase
         .from("cashup_sessions")
         .select("counts")
@@ -284,10 +307,6 @@ export default function DailyEntryPage() {
       if (n.data) setNightCounts(storedJsonToCounts((n.data as any).counts ?? {}));
       else setNightCounts({ ...emptyCounts });
 
-      // Removed counts + reason: we store inside night counts record (extra fields)
-      // We'll store removed counts & reason inside daily_sales.notes? NO.
-      // Instead: store in cashup_sessions as extra JSON keys inside counts.
-      // So here, read them from night counts: counts._removed_counts / _cash_diff_reason / _cash_diff_note
       const nightCountsRaw = (n.data as any)?.counts ?? {};
       const removedRaw = nightCountsRaw?._removed_counts ?? null;
       const reasonRaw = nightCountsRaw?._cash_diff_reason ?? "";
@@ -299,9 +318,13 @@ export default function DailyEntryPage() {
       setCashDiffReason((reasonRaw as CashDiffReason) || "");
       setCashDiffNote(String(noteRaw ?? ""));
 
-      setMsg("✅ Loaded saved data for this date (if any).");
+      setMorningDirty(false);
+      setClosingDirty(false);
+
+      setMsg("✅ Loaded saved data for this date.");
     } finally {
       setLoading(false);
+      initialLoadDoneRef.current = true;
     }
   }
 
@@ -317,7 +340,10 @@ export default function DailyEntryPage() {
     try {
       const { data } = await supabase.auth.getUser();
       const uid = data.user?.id ?? null;
-      if (!uid) return setMsg("❌ Not logged in.");
+      if (!uid) {
+        setMsg("❌ Not logged in.");
+        return;
+      }
 
       const payload: any = {
         business_date: date,
@@ -333,8 +359,12 @@ export default function DailyEntryPage() {
         onConflict: "business_date,store_id,session_type",
       } as any);
 
-      if (res.error) return setMsg("❌ Save morning cashup failed: " + res.error.message);
+      if (res.error) {
+        setMsg("❌ Save morning cashup failed: " + res.error.message);
+        return;
+      }
 
+      setMorningDirty(false);
       setMsg("✅ Morning cashup saved!");
       await loadExisting();
     } finally {
@@ -343,8 +373,8 @@ export default function DailyEntryPage() {
   }
 
   function useCashToRemoveAsCashSales() {
-    // recommended: actual cash sales equals should remove
     setCashSalesText(String(cashToRemove.toFixed(2)));
+    markClosingDirty();
   }
 
   function needReason() {
@@ -358,9 +388,11 @@ export default function DailyEntryPage() {
     try {
       const { data } = await supabase.auth.getUser();
       const uid = data.user?.id ?? null;
-      if (!uid) return setMsg("❌ Not logged in.");
+      if (!uid) {
+        setMsg("❌ Not logged in.");
+        return;
+      }
 
-      // Validate reason if needed
       if (needReason()) {
         if (!cashDiffReason) {
           setMsg("❌ Please select a reason (Actual cash sales ≠ Should remove).");
@@ -372,8 +404,6 @@ export default function DailyEntryPage() {
         }
       }
 
-      // 1) Save NIGHT cashup
-      // Store removed counts & reason inside counts JSON so we don't need new columns right now
       const nightCountsStore: any = countsToStoredJson(nightCounts);
       nightCountsStore._removed_counts = countsToStoredJson(removedCounts);
       nightCountsStore._cash_diff_reason = cashDiffReason;
@@ -385,7 +415,7 @@ export default function DailyEntryPage() {
         session_type: "NIGHT",
         counts: nightCountsStore,
         total_cash: nightTotal,
-        removed_cash: removedTotal, // store removed total here for quick query
+        removed_cash: removedTotal,
         entered_by: uid,
       };
 
@@ -393,9 +423,11 @@ export default function DailyEntryPage() {
         onConflict: "business_date,store_id,session_type",
       } as any);
 
-      if (nres.error) return setMsg("❌ Save closing cashup failed: " + nres.error.message);
+      if (nres.error) {
+        setMsg("❌ Save closing cashup failed: " + nres.error.message);
+        return;
+      }
 
-      // 2) daily_sales (Instore)
       const dailyPayload: any = {
         business_date: date,
         store_id: DEFAULT_STORE_ID,
@@ -410,9 +442,11 @@ export default function DailyEntryPage() {
         onConflict: "business_date,store_id",
       } as any);
 
-      if (ds.error) return setMsg("❌ Save instore failed: " + ds.error.message);
+      if (ds.error) {
+        setMsg("❌ Save instore failed: " + ds.error.message);
+        return;
+      }
 
-      // 3) platform_income (gross only; fees auto-calculated by DB trigger)
       for (const p of platforms) {
         const gross = round2(parseMoneyOrZero(platformGrossText[p.name] ?? ""));
         const payload: any = {
@@ -427,9 +461,13 @@ export default function DailyEntryPage() {
           onConflict: "business_date,store_id,platform",
         } as any);
 
-        if (res.error) return setMsg(`❌ Save platform "${p.name}" failed: ${res.error.message}`);
+        if (res.error) {
+          setMsg(`❌ Save platform "${p.name}" failed: ${res.error.message}`);
+          return;
+        }
       }
 
+      setClosingDirty(false);
       setMsg("✅ Closing saved! (cashup + sales + platforms refreshed)");
       await loadExisting();
     } finally {
@@ -437,257 +475,563 @@ export default function DailyEntryPage() {
     }
   }
 
-  const denomGrid = (
-    title: string,
+  function handleBackHome() {
+    if (morningDirty || closingDirty) {
+      setMsg("❌ You have unsaved changes. Please save before going back home.");
+      return;
+    }
+    window.location.href = "/staff/home";
+  }
+
+  function sectionCard(title: string, children: React.ReactNode, rightBadge?: React.ReactNode) {
+    return (
+      <div
+        style={{
+          border: `1px solid ${BORDER}`,
+          borderRadius: 16,
+          background: CARD_BG,
+          padding: 18,
+          marginBottom: 16,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            marginBottom: 14,
+          }}
+        >
+          <h2 style={{ margin: 0, color: TEXT, fontSize: 22 }}>{title}</h2>
+          {rightBadge}
+        </div>
+        {children}
+      </div>
+    );
+  }
+
+  function moneyBadge(label: string, value: string, color?: string) {
+    return (
+      <div
+        style={{
+          padding: "10px 12px",
+          borderRadius: 12,
+          background: "#F9FAFB",
+          border: `1px solid ${BORDER}`,
+          minWidth: 150,
+        }}
+      >
+        <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
+        <div style={{ fontWeight: 800, fontSize: 18, color: color || TEXT }}>{value}</div>
+      </div>
+    );
+  }
+
+  function actionButton(
+    label: string,
+    onClick: () => void,
+    options?: { primary?: boolean; danger?: boolean; disabled?: boolean }
+  ) {
+    const primary = options?.primary;
+    const danger = options?.danger;
+    const disabled = options?.disabled;
+
+    let bg = "#fff";
+    let borderColor = BORDER;
+    let textColor = TEXT;
+
+    if (primary) {
+      bg = WAK_BLUE;
+      borderColor = WAK_BLUE;
+      textColor = "#fff";
+    }
+
+    if (danger) {
+      bg = WAK_RED;
+      borderColor = WAK_RED;
+      textColor = "#fff";
+    }
+
+    if (disabled) {
+      bg = "#D1D5DB";
+      borderColor = "#D1D5DB";
+      textColor = "#fff";
+    }
+
+    return (
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          padding: "12px 16px",
+          minHeight: 46,
+          borderRadius: 12,
+          border: `1px solid ${borderColor}`,
+          background: bg,
+          color: textColor,
+          fontWeight: 800,
+          fontSize: 15,
+          cursor: disabled ? "not-allowed" : "pointer",
+          boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
+
+  function renderDenomGrid(
     counts: CashCounts,
     setCounts: any,
-    extra?: React.ReactNode
-  ) => (
-    <div style={{ border: "1px solid #ddd", padding: 12, marginBottom: 14 }}>
-      <h2 style={{ marginTop: 0 }}>{title}</h2>
+    section: "morning" | "closing"
+  ) {
+    return (
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(120px, 120px))",
+          gap: 10,
+          justifyContent: "start",
+        }}
+      >
+        {denomFields.map(({ label, key }) => (
+          <div
+            key={key}
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 12,
+              padding: 10,
+              background: "#FAFAFA",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                color: TEXT,
+                fontWeight: 600,
+                marginBottom: 8,
+                lineHeight: 1.3,
+                minHeight: 32,
+              }}
+            >
+              {label}
+            </div>
 
-      {extra && <div style={{ marginBottom: 10 }}>{extra}</div>}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(160px, 1fr))", gap: 10 }}>
-        {[
-          ["$100 notes", "note100"],
-          ["$50 notes", "note50"],
-          ["$20 notes", "note20"],
-          ["$10 notes", "note10"],
-          ["$5 notes", "note5"],
-          ["$2 coins", "coin2"],
-          ["$1 coins", "coin1"],
-          ["50c coins", "coin50c"],
-          ["20c coins", "coin20c"],
-          ["10c coins", "coin10c"],
-          ["5c coins", "coin5c"],
-        ].map(([label, key]) => (
-          <label key={String(key)} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-            <span>{label}</span>
             <input
-              style={{ width: 70 }}
               value={(counts as any)[key] ?? ""}
-              onChange={(e) => setCountsField(setCounts, key as any, e.target.value)}
-              placeholder=""
+              onChange={(e) => setCountsField(setCounts, key, e.target.value, section)}
+              style={{
+                width: 68,
+                padding: "8px 10px",
+                borderRadius: 10,
+                border: "1px solid #D1D5DB",
+                fontSize: 15,
+                background: "#fff",
+                display: "block",
+              }}
+              inputMode="numeric"
             />
-          </label>
+          </div>
         ))}
       </div>
-    </div>
-  );
+    );
+  }
 
   return (
-    <div style={{ padding: 20, maxWidth: 1100 }}>
-      <h1>Daily Closing Entry (Morning + Closing Cashup)</h1>
-
-      <div style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap", marginBottom: 12 }}>
-        <div>
-          <div style={{ fontSize: 12, color: "#666" }}>Business date</div>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={loading} />
-        </div>
-
-        <button onClick={loadExisting} disabled={loading}>
-          Refresh
-        </button>
-
-        <button onClick={saveMorning} disabled={loading} style={{ fontWeight: 700 }}>
-          Save Morning Cashup
-        </button>
-
-        <button onClick={saveClosingAndSales} disabled={loading} style={{ fontWeight: 800 }}>
-          Save Closing (Cashup + Sales)
-        </button>
-
-        <button onClick={() => (window.location.href = "/staff/home")}>
-          ← Back to Home
-        </button>
-
-        {loading && <span>Loading...</span>}
-      </div>
-
-      {msg && <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>{msg}</div>}
-
-      {/* Morning cashup */}
-      {denomGrid(
-        "Morning Cashup (open)",
-        morningCounts,
-        setMorningCounts,
-        <div style={{ fontSize: 12, color: "#666" }}>
-          Count the cash in till when opening. (If not saved, system uses default {money(DEFAULT_FLOAT_IF_NO_MORNING)}.)
-          <div style={{ marginTop: 6 }}>
-            Morning total: <b>{money(morningTotal)}</b>{" "}
-            {!hasMorningRecord && (
-              <span style={{ color: "#999", marginLeft: 8 }}>
-                (Not saved yet → baseline will be {money(DEFAULT_FLOAT_IF_NO_MORNING)})
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Closing cashup */}
-      {denomGrid(
-        "Closing Cashup (close)",
-        nightCounts,
-        setNightCounts,
-        <div style={{ fontSize: 12, color: "#666" }}>
-          Cash to remove is calculated by: <b>Night total − Morning total</b>. If no morning record, baseline is{" "}
-          <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>.
-          <div style={{ marginTop: 6 }}>
-            Night total: <b>{money(nightTotal)}</b>
-          </div>
-          <div style={{ marginTop: 6 }}>
-            Baseline morning used: <b>{money(baselineMorningTotal)}</b>
-          </div>
-          <div style={{ marginTop: 6 }}>
-            Cash to remove (Should remove): <b>{money(cashToRemove)}</b>
-          </div>
-        </div>
-      )}
-
-      {/* Removed cash (NEW) */}
-      {denomGrid(
-        "Cash Removed (count what you actually removed)",
-        removedCounts,
-        setRemovedCounts,
-        <div style={{ fontSize: 12, color: "#666" }}>
-          Removed total: <b>{money(removedTotal)}</b>
-          <div style={{ marginTop: 6 }}>
-            Difference (Removed − Should remove):{" "}
-            <b style={{ color: Math.abs(removedVsShouldDiff) < EPS ? "green" : "crimson" }}>
-              {money(removedVsShouldDiff)}
-            </b>
-          </div>
-        </div>
-      )}
-
-      {/* Instore */}
-      <div style={{ border: "1px solid #ddd", padding: 12, marginBottom: 14 }}>
-        <h2 style={{ marginTop: 0 }}>Instore</h2>
-
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            Cash sales (from POS):
-            <input
-              style={{ width: 180, marginLeft: 8 }}
-              value={cashSalesText}
-              onChange={(e) => setCashSalesText(e.target.value)}
-              placeholder=""
-            />
-          </label>
-
-          <label>
-            EFTPOS sales:
-            <input
-              style={{ width: 180, marginLeft: 8 }}
-              value={eftposSalesText}
-              onChange={(e) => setEftposSalesText(e.target.value)}
-              placeholder=""
-            />
-          </label>
-
-          <button onClick={useCashToRemoveAsCashSales} disabled={loading}>
-            Set Cash sales = Should remove
-          </button>
-        </div>
-
-        <div style={{ marginTop: 10, color: "#666" }}>
-          Instore subtotal: <b>{instoreSubtotal.toFixed(2)}</b>
-        </div>
-
-        <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Notes (optional)</div>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} style={{ width: "100%" }} />
-        </div>
-
-        <div style={{ marginTop: 12, padding: 10, border: "1px dashed #ccc" }}>
+    <div
+      style={{
+        background: WAK_BG,
+        minHeight: "100vh",
+        padding: 20,
+      }}
+    >
+      <div style={{ maxWidth: 980, margin: "0 auto" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            gap: 16,
+            flexWrap: "wrap",
+            marginBottom: 18,
+          }}
+        >
           <div>
-            Diff (Actual cash sales − Should remove):{" "}
-            <b style={{ color: Math.abs(actualCashVsShouldDiff) < EPS ? "green" : "crimson" }}>
-              {money(actualCashVsShouldDiff)}
-            </b>
+            <h1 style={{ margin: 0, color: TEXT }}>Daily Closing Entry</h1>
+            <div style={{ marginTop: 6, color: MUTED }}>
+              Morning cashup, closing cashup, instore sales and online platforms
+            </div>
           </div>
 
-          {needReason() && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-                Because this diff is not zero, please select a reason (required to save closing):
-              </div>
-
-              <select
-                value={cashDiffReason}
-                onChange={(e) => setCashDiffReason(e.target.value as CashDiffReason)}
-                style={{ width: 360 }}
-              >
-                <option value="">-- Select reason --</option>
-                <option value="FLOAT_CHANGED">Cash left in till / float changed</option>
-                <option value="CASH_REFUND_OR_PAYOUT">Cash paid out / refunds</option>
-                <option value="CASH_DROP_NOT_COUNTED">Cash drop not counted (safe/other)</option>
-                <option value="COUNTING_MISTAKE">Counting mistake</option>
-                <option value="POS_CASH_ADJUSTMENT">POS cash incorrect / adjustment</option>
-                <option value="OTHER">Other</option>
-              </select>
-
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 12, color: "#666" }}>Note (optional, required if Other)</div>
-                <input
-                  style={{ width: "100%" }}
-                  value={cashDiffNote}
-                  onChange={(e) => setCashDiffNote(e.target.value)}
-                  placeholder=""
-                />
-              </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Business date</div>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                disabled={loading}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: `1px solid ${BORDER}`,
+                  fontSize: 15,
+                  background: "#fff",
+                }}
+              />
             </div>
-          )}
+
+            {actionButton("Refresh", loadExisting, { disabled: loading })}
+            {actionButton("← Back to Home", handleBackHome, { disabled: loading })}
+
+            {loading && <span style={{ color: MUTED, fontWeight: 600 }}>Loading...</span>}
+          </div>
         </div>
-      </div>
 
-      {/* Online Platform */}
-      <div style={{ border: "1px solid #ddd", padding: 12, marginBottom: 14 }}>
-        <h2 style={{ marginTop: 0 }}>Online Platform</h2>
-
-        {platforms.length === 0 ? (
-          <div style={{ color: "#999" }}>No platforms configured (Owner can add platforms in Manager → Platforms).</div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table cellPadding={8} style={{ borderCollapse: "collapse", minWidth: 720 }}>
-              <thead>
-                <tr>
-                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Platform</th>
-                  <th style={{ border: "1px solid #ccc", textAlign: "left" }}>Gross income</th>
-                </tr>
-              </thead>
-              <tbody>
-                {platforms.map((p) => (
-                  <tr key={p.id}>
-                    <td style={{ border: "1px solid #ccc", fontWeight: 700 }}>{p.name}</td>
-                    <td style={{ border: "1px solid #ccc" }}>
-                      <input
-                        style={{ width: 180 }}
-                        value={platformGrossText[p.name] ?? ""}
-                        onChange={(e) => setPlatformGrossText((prev) => ({ ...prev, [p.name]: e.target.value }))}
-                        placeholder=""
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div style={{ marginTop: 10, color: "#666" }}>
-              Online subtotal: <b>{onlineSubtotal.toFixed(2)}</b>
-            </div>
+        {msg && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              background: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: TEXT,
+            }}
+          >
+            {msg}
           </div>
         )}
-      </div>
 
-      {/* Total */}
-      <div style={{ border: "1px solid #ddd", padding: 12 }}>
-        <h2 style={{ marginTop: 0 }}>Total</h2>
-        <div>
-          Total (Instore + Online): <b style={{ fontSize: 22 }}>{total.toFixed(2)}</b>
-        </div>
-        <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>Total is auto-calculated.</div>
+        {sectionCard(
+          "Morning Cashup (Open)",
+          <>
+            <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
+              Count the cash in till when opening. If no morning cashup is saved, system uses default baseline{" "}
+              <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>.
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+              {moneyBadge("Morning total", money(morningTotal))}
+              {moneyBadge(
+                hasMorningRecord ? "Saved baseline used" : "Default baseline used",
+                money(hasMorningRecord ? morningTotal : DEFAULT_FLOAT_IF_NO_MORNING),
+                hasMorningRecord ? WAK_BLUE : WAK_RED
+              )}
+            </div>
+
+            {renderDenomGrid(morningCounts, setMorningCounts, "morning")}
+
+            <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+              {actionButton("Save Morning Cashup", saveMorning, {
+                primary: true,
+                disabled: loading,
+              })}
+            </div>
+          </>,
+          morningDirty ? (
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: "#FEF3C7",
+                color: "#92400E",
+                fontWeight: 700,
+                fontSize: 13,
+              }}
+            >
+              Unsaved changes
+            </div>
+          ) : undefined
+        )}
+
+        {sectionCard(
+          "Closing Cashup (Close)",
+          <>
+            <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
+              Cash to remove is calculated as <b>Night total − Morning total</b>. If no morning record exists, baseline is{" "}
+              <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>.
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+              {moneyBadge("Night total", money(nightTotal))}
+              {moneyBadge("Baseline morning used", money(baselineMorningTotal))}
+              {moneyBadge("Cash to remove", money(cashToRemove), WAK_BLUE)}
+            </div>
+
+            {renderDenomGrid(nightCounts, setNightCounts, "closing")}
+          </>,
+          closingDirty ? (
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: "#FEF3C7",
+                color: "#92400E",
+                fontWeight: 700,
+                fontSize: 13,
+              }}
+            >
+              Unsaved changes
+            </div>
+          ) : undefined
+        )}
+
+        {sectionCard(
+          "Cash Removed",
+          <>
+            <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
+              Count the cash you actually removed from the till.
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+              {moneyBadge("Removed total", money(removedTotal))}
+              {moneyBadge(
+                "Removed − Should remove",
+                money(removedVsShouldDiff),
+                Math.abs(removedVsShouldDiff) < EPS ? "#15803D" : WAK_RED
+              )}
+            </div>
+
+            {renderDenomGrid(removedCounts, setRemovedCounts, "closing")}
+          </>
+        )}
+
+        {sectionCard(
+          "Instore",
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 16, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
+                CASH Sales (from POS)
+              </div>
+              <input
+                value={cashSalesText}
+                onChange={(e) => {
+                  setCashSalesText(e.target.value);
+                  markClosingDirty();
+                }}
+                style={{
+                  width: 260,
+                  maxWidth: "100%",
+                  boxSizing: "border-box",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #D1D5DB",
+                  fontSize: 16,
+                  background: "#fff",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 16, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
+                EFTPOS Sales
+              </div>
+              <input
+                value={eftposSalesText}
+                onChange={(e) => {
+                  setEftposSalesText(e.target.value);
+                  markClosingDirty();
+                }}
+                style={{
+                  width: 260,
+                  maxWidth: "100%",
+                  boxSizing: "border-box",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #D1D5DB",
+                  fontSize: 16,
+                  background: "#fff",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              {actionButton("Set Cash Sales = Should Remove", useCashToRemoveAsCashSales, {
+                disabled: loading,
+              })}
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+              {moneyBadge("Instore subtotal", money(instoreSubtotal))}
+              {moneyBadge(
+                "Actual cash sales − Should remove",
+                money(actualCashVsShouldDiff),
+                Math.abs(actualCashVsShouldDiff) < EPS ? "#15803D" : WAK_RED
+              )}
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
+                Notes (optional)
+              </div>
+              <textarea
+                value={notes}
+                onChange={(e) => {
+                  setNotes(e.target.value);
+                  markClosingDirty();
+                }}
+                rows={4}
+                style={{
+                  width: "100%",
+                  maxWidth: 560,
+                  boxSizing: "border-box",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #D1D5DB",
+                  fontSize: 15,
+                  background: "#fff",
+                  resize: "vertical",
+                }}
+              />
+            </div>
+
+            <div
+              style={{
+                border: "1px dashed #D1D5DB",
+                borderRadius: 14,
+                padding: 14,
+                background: "#FCFCFC",
+              }}
+            >
+              <div style={{ fontWeight: 700, color: TEXT, marginBottom: 8 }}>Cash Difference Check</div>
+              <div style={{ color: MUTED, marginBottom: needReason() ? 12 : 0 }}>
+                If this difference is not zero, a reason is required before saving closing.
+              </div>
+
+              {needReason() && (
+                <>
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>Reason</div>
+                    <select
+                      value={cashDiffReason}
+                      onChange={(e) => {
+                        setCashDiffReason(e.target.value as CashDiffReason);
+                        markClosingDirty();
+                      }}
+                      style={{
+                        width: 320,
+                        maxWidth: "100%",
+                        padding: "12px 14px",
+                        borderRadius: 12,
+                        border: "1px solid #D1D5DB",
+                        fontSize: 15,
+                        background: "#fff",
+                      }}
+                    >
+                      <option value="">-- Select reason --</option>
+                      <option value="FLOAT_CHANGED">Cash left in till / float changed</option>
+                      <option value="CASH_REFUND_OR_PAYOUT">Cash paid out / refunds</option>
+                      <option value="CASH_DROP_NOT_COUNTED">Cash drop not counted (safe/other)</option>
+                      <option value="COUNTING_MISTAKE">Counting mistake</option>
+                      <option value="POS_CASH_ADJUSTMENT">POS cash incorrect / adjustment</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
+                      Note {cashDiffReason === "OTHER" ? "(required)" : "(optional)"}
+                    </div>
+                    <input
+                      value={cashDiffNote}
+                      onChange={(e) => {
+                        setCashDiffNote(e.target.value);
+                        markClosingDirty();
+                      }}
+                      style={{
+                        width: 420,
+                        maxWidth: "100%",
+                        boxSizing: "border-box",
+                        padding: "12px 14px",
+                        borderRadius: 12,
+                        border: "1px solid #D1D5DB",
+                        fontSize: 15,
+                        background: "#fff",
+                      }}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
+
+        {sectionCard(
+          "Online Platform",
+          platforms.length === 0 ? (
+            <div style={{ color: MUTED }}>
+              No platforms configured (Owner can add platforms in Manager → Platforms).
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {platforms.map((p) => (
+                  <div
+                    key={p.id}
+                    style={{
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "#FAFAFA",
+                      maxWidth: 360,
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 700, marginBottom: 8 }}>
+                      {p.name}
+                    </div>
+                    <input
+                      value={platformGrossText[p.name] ?? ""}
+                      onChange={(e) => {
+                        setPlatformGrossText((prev) => ({ ...prev, [p.name]: e.target.value }));
+                        markClosingDirty();
+                      }}
+                      style={{
+                        width: 220,
+                        maxWidth: "100%",
+                        boxSizing: "border-box",
+                        padding: "12px 14px",
+                        borderRadius: 12,
+                        border: "1px solid #D1D5DB",
+                        fontSize: 15,
+                        background: "#fff",
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 16 }}>
+                {moneyBadge("Online subtotal", money(onlineSubtotal))}
+              </div>
+            </>
+          )
+        )}
+
+        {sectionCard(
+          "Total Summary",
+          <>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+              {moneyBadge("Instore subtotal", money(instoreSubtotal))}
+              {moneyBadge("Online subtotal", money(onlineSubtotal))}
+              {moneyBadge("Grand total", money(total), WAK_BLUE)}
+            </div>
+
+            <div style={{ fontSize: 13, color: MUTED, marginBottom: 18 }}>
+              Total is auto-calculated from instore + online.
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              {actionButton("Save Closing (Cashup + Sales)", saveClosingAndSales, {
+                primary: true,
+                disabled: loading,
+              })}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
