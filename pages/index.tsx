@@ -23,7 +23,6 @@ export default function Home() {
   const [pin, setPin] = useState<string>("");
 
   async function loadDirectory() {
-    setMsg("");
     const res = await supabase
       .from("profiles")
       .select("id, full_name, preferred_name")
@@ -44,12 +43,12 @@ export default function Home() {
 
   useEffect(() => {
     loadDirectory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function pinLogin() {
     setLoading(true);
     setMsg("");
+
     try {
       if (!staffId) {
         setMsg("❌ Please select your name.");
@@ -75,6 +74,7 @@ export default function Home() {
       }
 
       const actionLink = data.action_link;
+
       if (!actionLink) {
         setMsg("❌ No login link returned from server.");
         return;
@@ -94,22 +94,62 @@ export default function Home() {
         <meta name="apple-mobile-web-app-title" content="WAK Staff System" />
       </Head>
 
-      <div style={{ padding: 20, maxWidth: 520 }}>
-        <h1>Wot A Kebab - Mooroolbark</h1>
-
-        {msg && (
-          <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>
-            {msg}
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#f5f6f8",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <div
+          style={{
+            width: 360,
+            background: "white",
+            padding: 30,
+            borderRadius: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.1)",
+          }}
+        >
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <img src="/logo.png" style={{ width: 300 }} />
           </div>
-        )}
 
-        <div style={{ border: "1px solid #ddd", padding: 12 }}>
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Select your name</div>
+          <h2 style={{ textAlign: "center", marginBottom: 20 }}>
+            WAK Staff Login
+          </h2>
+
+          {msg && (
+            <div
+              style={{
+                border: "1px solid #ddd",
+                padding: 10,
+                marginBottom: 12,
+                fontSize: 14,
+              }}
+            >
+              {msg}
+            </div>
+          )}
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+              Staff name
+            </div>
+
             <select
               value={staffId}
               onChange={(e) => setStaffId(e.target.value)}
-              style={{ width: "100%" }}
+              style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    fontSize: 16,
+                    boxSizing: "border-box",
+                    border: "1px solid #ccc",
+                    borderRadius: 6,
+                    background: "#fff",
+              }}
             >
               {directory.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -119,39 +159,73 @@ export default function Home() {
             </select>
           </div>
 
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>PIN (any length)</div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+              PIN
+            </div>
+
             <input
               value={pin}
               onChange={(e) => setPin(e.target.value)}
-              style={{ width: "100%", fontSize: 18 }}
+              style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    fontSize: 16,
+                    boxSizing: "border-box",
+                    border: "1px solid #ccc",
+                    borderRadius: 6,
+                    background: "#fff",
+              }}
             />
           </div>
 
           <button
             onClick={pinLogin}
             disabled={loading}
-            style={{ width: "100%", fontWeight: 800 }}
+            style={{
+              width: "100%",
+              padding: 10,
+              fontSize: 16,
+              fontWeight: 700,
+              background: "#1e3a8a",
+              color: "white",
+              border: "none",
+              borderRadius: 6,
+            }}
           >
-            {loading ? "Logging in…" : "Login"}
+            {loading ? "Logging in..." : "Login"}
           </button>
 
           <button
             onClick={loadDirectory}
-            disabled={loading}
-            style={{ width: "100%", marginTop: 8 }}
+            style={{
+              width: "100%",
+              padding: 8,
+              marginTop: 10,
+              border: "1px solid #ddd",
+              background: "white",
+            }}
           >
             Refresh staff list
           </button>
+
+          <p
+            style={{
+              marginTop: 14,
+              fontSize: 12,
+              color: "#777",
+              textAlign: "center",
+            }}
+          >
+            If your account is deactivated, you cannot login.
+          </p>
+
+          <p style={{ textAlign: "center", marginTop: 6 }}>
+            <a href="/admin-login" style={{ fontSize: 12 }}>
+              Emergency admin login
+            </a>
+          </p>
         </div>
-
-        <p style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
-          If your account is deactivated, you cannot login.
-        </p>
-
-        <p style={{ marginTop: 8, fontSize: 12 }}>
-          <a href="/admin-login">Emergency admin login</a>
-        </p>
       </div>
     </>
   );
