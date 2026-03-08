@@ -33,15 +33,6 @@ type Profile = {
   is_active?: boolean | null;
 };
 
-type StaffPayRate = {
-  id?: any;
-  staff_id: string;
-  weekday_rate?: number | null;
-  saturday_rate?: number | null;
-  sunday_rate?: number | null;
-  store_id?: string | null;
-};
-
 type DayType = "WEEKDAY" | "SATURDAY" | "SUNDAY";
 
 const WAK_BLUE = "#1E5A9E";
@@ -245,15 +236,15 @@ function getRowBackground(alerts: { label: string; kind: "red" | "yellow" | "blu
   const labels = alerts.map((a) => a.label);
 
   if (labels.includes("OPEN CLOCK")) {
-    return "#FEF2F2"; // light red
+    return "#FEF2F2";
   }
 
   if (labels.includes("CROSSES MIDNIGHT") || labels.includes("LONG SHIFT")) {
-    return "#FFFBEA"; // light yellow
+    return "#FFFBEA";
   }
 
   if (labels.includes("POSSIBLE COVER SHIFT")) {
-    return "#EFF6FF"; // light blue
+    return "#EFF6FF";
   }
 
   return "#FFFFFF";
@@ -314,7 +305,6 @@ export default function ClockAdjustmentPage() {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [clocks, setClocks] = useState<TimeClock[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [payRates, setPayRates] = useState<StaffPayRate[]>([]);
 
   const [editIn, setEditIn] = useState<Record<number, string>>({});
   const [editOut, setEditOut] = useState<Record<number, string>>({});
@@ -332,22 +322,6 @@ export default function ClockAdjustmentPage() {
     return nameById[staffId] ?? staffId;
   }
 
-  const payRateByStaffId = useMemo(() => {
-    const map: Record<string, StaffPayRate> = {};
-    for (const r of payRates) {
-      if (r?.staff_id) map[r.staff_id] = r;
-    }
-    return map;
-  }, [payRates]);
-
-  function rateFor(staffId: string, dayType: DayType): number | null {
-    const r = payRateByStaffId[staffId];
-    if (!r) return null;
-    if (dayType === "SATURDAY") return (r.saturday_rate ?? null) as any;
-    if (dayType === "SUNDAY") return (r.sunday_rate ?? null) as any;
-    return (r.weekday_rate ?? null) as any;
-  }
-
   async function fetchData() {
     if (!isManagerOrOwner) return;
 
@@ -360,7 +334,7 @@ export default function ClockAdjustmentPage() {
       const clockWindowStart = new Date(new Date(startISO).getTime() - 6 * 60 * 60 * 1000).toISOString();
       const clockWindowEnd = new Date(new Date(endISO).getTime() + 6 * 60 * 60 * 1000).toISOString();
 
-      const [shiftRes, clockRes, profileRes, payRes] = await Promise.all([
+      const [shiftRes, clockRes, profileRes] = await Promise.all([
         supabase
           .from("shifts")
           .select("*")
@@ -381,19 +355,15 @@ export default function ClockAdjustmentPage() {
           .from("profiles")
           .select("*")
           .order("full_name", { ascending: true }),
-
-        supabase.from("staff_pay_rates").select("*"),
       ]);
 
       if (shiftRes.error) return setMsg("Error fetching shifts: " + shiftRes.error.message);
       if (clockRes.error) return setMsg("Error fetching time_clock: " + clockRes.error.message);
       if (profileRes.error) return setMsg("Error fetching profiles: " + profileRes.error.message);
-      if (payRes.error) return setMsg("Error fetching staff_pay_rates: " + payRes.error.message);
 
       setShifts((shiftRes.data ?? []) as any);
       setClocks((clockRes.data ?? []) as any);
       setProfiles((profileRes.data ?? []) as any);
-      setPayRates((payRes.data ?? []) as any);
     } catch (e: any) {
       setMsg("Error: " + (e?.message ?? String(e)));
     } finally {
@@ -435,32 +405,32 @@ export default function ClockAdjustmentPage() {
     return candidates[0];
   }
 
-function findCoverClockForShift(shift: Shift) {
-  const sStart = new Date(shift.shift_start).getTime();
-  const sEnd = new Date(shift.shift_end).getTime();
-  if (Number.isNaN(sStart) || Number.isNaN(sEnd)) return null;
+  function findCoverClockForShift(shift: Shift) {
+    const sStart = new Date(shift.shift_start).getTime();
+    const sEnd = new Date(shift.shift_end).getTime();
+    if (Number.isNaN(sStart) || Number.isNaN(sEnd)) return null;
 
-  const windowStart = sStart - 3 * 60 * 60 * 1000;
-  const windowEnd = sEnd + 3 * 60 * 60 * 1000;
+    const windowStart = sStart - 3 * 60 * 60 * 1000;
+    const windowEnd = sEnd + 3 * 60 * 60 * 1000;
 
-  const candidates = clocks
-    .filter((c) => c.staff_id !== shift.staff_id)
-    .filter((c) => c.clock_in_at)
-    .filter((c) => {
-      const t = new Date(c.clock_in_at as string).getTime();
-      return t >= windowStart && t <= windowEnd;
+    const candidates = clocks
+      .filter((c) => c.staff_id !== shift.staff_id)
+      .filter((c) => c.clock_in_at)
+      .filter((c) => {
+        const t = new Date(c.clock_in_at as string).getTime();
+        return t >= windowStart && t <= windowEnd;
+      });
+
+    if (candidates.length === 0) return null;
+
+    candidates.sort((a, b) => {
+      const ta = new Date(a.clock_in_at as string).getTime();
+      const tb = new Date(b.clock_in_at as string).getTime();
+      return Math.abs(ta - sStart) - Math.abs(tb - sStart);
     });
 
-  if (candidates.length === 0) return null;
-
-  candidates.sort((a, b) => {
-    const ta = new Date(a.clock_in_at as string).getTime();
-    const tb = new Date(b.clock_in_at as string).getTime();
-    return Math.abs(ta - sStart) - Math.abs(tb - sStart);
-  });
-
-  return candidates[0];
-}
+    return candidates[0];
+  }
 
   async function createClockForShift(shift: Shift) {
     setLoading(true);
@@ -623,14 +593,14 @@ function findCoverClockForShift(shift: Shift) {
       const alerts = getAlerts(shift, clock, coverClock);
 
       const dayType = getDayTypeByISO(shift.shift_start);
-      const rate = rateFor(shift.staff_id, dayType);
+      const rate = shift.hourly_rate ?? null;
 
       const payrollHours = payroll.payrollWorkMin !== null ? round2(payroll.payrollWorkMin / 60) : null;
-      const pay = payrollHours !== null && rate !== null ? round2(payrollHours * rate) : null;
+      const pay = payrollHours !== null && rate !== null ? round2(payrollHours * Number(rate)) : null;
 
       return { shift, clock, coverClock, payroll, dayType, rate, payrollHours, pay, alerts };
     });
-  }, [filteredShifts, clocks, payRateByStaffId]);
+  }, [filteredShifts, clocks]);
 
   const overallSummary = useMemo(() => {
     let totalMin = 0;
@@ -655,7 +625,6 @@ function findCoverClockForShift(shift: Shift) {
     list.sort((a, b) => a.name.localeCompare(b.name));
     return list;
   }, [profiles]);
-
 
   if (authLoading) {
     return (
@@ -873,7 +842,6 @@ function findCoverClockForShift(shift: Shift) {
             </div>
           </div>
 
-
           <div
             ref={tableScrollRef}
             style={{
@@ -888,7 +856,7 @@ function findCoverClockForShift(shift: Shift) {
                 width: "100%",
                 borderCollapse: "separate",
                 borderSpacing: 0,
-                minWidth: 1180,
+                minWidth: 1320,
               }}
             >
               <thead>
@@ -1050,13 +1018,23 @@ function findCoverClockForShift(shift: Shift) {
                           padding: "14px 12px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 150,
+                          minWidth: 220,
                         }}
                       >
                         <div style={{ marginBottom: 10 }}>{sourceBadge}</div>
 
                         <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Hours</div>
-                        <div style={{ fontWeight: 800, color: TEXT }}>{hoursText}</div>
+                        <div style={{ fontWeight: 800, color: TEXT, marginBottom: 10 }}>{hoursText}</div>
+
+                        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Rate</div>
+                        <div style={{ color: TEXT, marginBottom: 10 }}>
+                          {r.rate === null ? "-" : money(r.rate)}
+                        </div>
+
+                        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Pay</div>
+                        <div style={{ fontWeight: 800, color: TEXT }}>
+                          {money(r.pay)}
+                        </div>
                       </td>
 
                       <td
@@ -1133,7 +1111,7 @@ function findCoverClockForShift(shift: Shift) {
           </div>
 
           <div style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
-            Staff Summary (hours & pay) is now available in the Owner page.
+            Payroll is calculated using each shift’s saved hourly rate.
           </div>
         </div>
       </div>

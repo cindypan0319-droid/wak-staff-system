@@ -9,6 +9,7 @@ type Shift = {
   shift_start: string;
   shift_end: string;
   break_minutes?: number | null;
+  hourly_rate?: number | null;
 };
 
 type TimeClock = {
@@ -17,7 +18,6 @@ type TimeClock = {
   staff_id: string;
   clock_in_at: string | null;
   clock_out_at: string | null;
-
   adjusted_clock_in_at?: string | null;
   adjusted_clock_out_at?: string | null;
 };
@@ -27,13 +27,6 @@ type Profile = {
   full_name: string | null;
   role?: string | null;
   is_active?: boolean | null;
-};
-
-type StaffPayRate = {
-  staff_id: string;
-  weekday_rate?: number | null;
-  saturday_rate?: number | null;
-  sunday_rate?: number | null;
 };
 
 type DayType = "WEEKDAY" | "SATURDAY" | "SUNDAY";
@@ -157,6 +150,12 @@ function inputStyle(width?: number | string) {
   };
 }
 
+function dayTypeLabel(dayType: DayType) {
+  if (dayType === "SATURDAY") return "Saturday";
+  if (dayType === "SUNDAY") return "Sunday";
+  return "Weekday";
+}
+
 export default function OwnerStaffSummaryPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [viewerRole, setViewerRole] = useState<string | null>(null);
@@ -205,7 +204,6 @@ export default function OwnerStaffSummaryPage() {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [clocks, setClocks] = useState<TimeClock[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [payRates, setPayRates] = useState<StaffPayRate[]>([]);
 
   const nameById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -219,22 +217,6 @@ export default function OwnerStaffSummaryPage() {
     return nameById[staffId] ?? staffId;
   }
 
-  const payRateByStaffId = useMemo(() => {
-    const map: Record<string, StaffPayRate> = {};
-    for (const r of payRates) {
-      if (r?.staff_id) map[r.staff_id] = r;
-    }
-    return map;
-  }, [payRates]);
-
-  function rateFor(staffId: string, dayType: DayType): number | null {
-    const r = payRateByStaffId[staffId];
-    if (!r) return null;
-    if (dayType === "SATURDAY") return (r.saturday_rate ?? null) as any;
-    if (dayType === "SUNDAY") return (r.sunday_rate ?? null) as any;
-    return (r.weekday_rate ?? null) as any;
-  }
-
   async function fetchData() {
     if (!isOwner) return;
 
@@ -244,10 +226,14 @@ export default function OwnerStaffSummaryPage() {
     try {
       const { startISO, endISO } = buildRange(fromDate, toDate);
 
-      const clockWindowStart = new Date(new Date(startISO).getTime() - 6 * 60 * 60 * 1000).toISOString();
-      const clockWindowEnd = new Date(new Date(endISO).getTime() + 6 * 60 * 60 * 1000).toISOString();
+      const clockWindowStart = new Date(
+        new Date(startISO).getTime() - 6 * 60 * 60 * 1000
+      ).toISOString();
+      const clockWindowEnd = new Date(
+        new Date(endISO).getTime() + 6 * 60 * 60 * 1000
+      ).toISOString();
 
-      const [shiftRes, clockRes, profileRes, payRes] = await Promise.all([
+      const [shiftRes, clockRes, profileRes] = await Promise.all([
         supabase
           .from("shifts")
           .select("*")
@@ -268,21 +254,15 @@ export default function OwnerStaffSummaryPage() {
           .from("profiles")
           .select("*")
           .order("full_name", { ascending: true }),
-
-        supabase
-          .from("staff_pay_rates")
-          .select("*"),
       ]);
 
       if (shiftRes.error) return setMsg("Error fetching shifts: " + shiftRes.error.message);
       if (clockRes.error) return setMsg("Error fetching time_clock: " + clockRes.error.message);
       if (profileRes.error) return setMsg("Error fetching profiles: " + profileRes.error.message);
-      if (payRes.error) return setMsg("Error fetching staff_pay_rates: " + payRes.error.message);
 
       setShifts((shiftRes.data ?? []) as any);
       setClocks((clockRes.data ?? []) as any);
       setProfiles((profileRes.data ?? []) as any);
-      setPayRates((payRes.data ?? []) as any);
     } catch (e: any) {
       setMsg("Error: " + (e?.message ?? String(e)));
     } finally {
@@ -356,14 +336,17 @@ export default function OwnerStaffSummaryPage() {
       const payroll = getPayrollMinutes(shift, clock);
 
       const dayType = getDayTypeByISO(shift.shift_start);
-      const rate = rateFor(shift.staff_id, dayType);
+      const rate = shift.hourly_rate ?? null;
 
-      const payrollHours = payroll.payrollWorkMin !== null ? round2(payroll.payrollWorkMin / 60) : null;
-      const pay = payrollHours !== null && rate !== null ? round2(payrollHours * rate) : null;
+      const payrollHours =
+        payroll.payrollWorkMin !== null ? round2(payroll.payrollWorkMin / 60) : null;
+
+      const pay =
+        payrollHours !== null && rate !== null ? round2(payrollHours * Number(rate)) : null;
 
       return { shift, payroll, dayType, rate, payrollHours, pay };
     });
-  }, [filteredShifts, clocks, payRateByStaffId]);
+  }, [filteredShifts, clocks]);
 
   const overallSummary = useMemo(() => {
     let totalMin = 0;
@@ -380,76 +363,84 @@ export default function OwnerStaffSummaryPage() {
     };
   }, [rows]);
 
+  type RateGroup = {
+    dayType: DayType;
+    rate: number | null;
+    minutes: number;
+    pay: number;
+  };
+
   type StaffAgg = {
     staff_id: string;
     staff_name: string;
-    weekdayMin: number;
-    saturdayMin: number;
-    sundayMin: number;
-    weekdayPay: number;
-    saturdayPay: number;
-    sundayPay: number;
-    weekdayRate: number | null;
-    saturdayRate: number | null;
-    sundayRate: number | null;
+    groups: RateGroup[];
   };
 
   const perStaffSummary = useMemo(() => {
     const map: Record<string, StaffAgg> = {};
 
-    const ensure = (staffId: string): StaffAgg => {
+    const ensureStaff = (staffId: string): StaffAgg => {
       if (map[staffId]) return map[staffId];
-
-      const weekdayRate = rateFor(staffId, "WEEKDAY");
-      const saturdayRate = rateFor(staffId, "SATURDAY");
-      const sundayRate = rateFor(staffId, "SUNDAY");
-
       map[staffId] = {
         staff_id: staffId,
         staff_name: staffLabel(staffId),
-        weekdayMin: 0,
-        saturdayMin: 0,
-        sundayMin: 0,
-        weekdayPay: 0,
-        saturdayPay: 0,
-        sundayPay: 0,
-        weekdayRate,
-        saturdayRate,
-        sundayRate,
+        groups: [],
       };
-
       return map[staffId];
     };
 
     for (const r of rows) {
       const staffId = r.shift.staff_id;
-      const agg = ensure(staffId);
+      const agg = ensureStaff(staffId);
 
       const min = r.payroll.payrollWorkMin ?? 0;
-      const hrs = min / 60;
+      const pay = r.pay ?? 0;
+      const rate = r.rate ?? null;
 
-      if (r.dayType === "WEEKDAY") {
-        agg.weekdayMin += min;
-        if (agg.weekdayRate !== null) agg.weekdayPay += hrs * agg.weekdayRate;
-      } else if (r.dayType === "SATURDAY") {
-        agg.saturdayMin += min;
-        if (agg.saturdayRate !== null) agg.saturdayPay += hrs * agg.saturdayRate;
+      const existing = agg.groups.find(
+        (g) => g.dayType === r.dayType && (g.rate ?? null) === (rate ?? null)
+      );
+
+      if (existing) {
+        existing.minutes += min;
+        existing.pay += pay;
       } else {
-        agg.sundayMin += min;
-        if (agg.sundayRate !== null) agg.sundayPay += hrs * agg.sundayRate;
+        agg.groups.push({
+          dayType: r.dayType,
+          rate,
+          minutes: min,
+          pay,
+        });
       }
     }
 
-    const list = Object.values(map).map((a) => ({
-      ...a,
-      weekdayPay: round2(a.weekdayPay),
-      saturdayPay: round2(a.saturdayPay),
-      sundayPay: round2(a.sundayPay),
+    const dayOrder: Record<DayType, number> = {
+      WEEKDAY: 1,
+      SATURDAY: 2,
+      SUNDAY: 3,
+    };
+
+    const list = Object.values(map).map((staff) => ({
+      ...staff,
+      groups: staff.groups
+        .map((g) => ({
+          ...g,
+          minutes: g.minutes,
+          pay: round2(g.pay),
+        }))
+        .sort((a, b) => {
+          if (dayOrder[a.dayType] !== dayOrder[b.dayType]) {
+            return dayOrder[a.dayType] - dayOrder[b.dayType];
+          }
+          const rateA = a.rate ?? -1;
+          const rateB = b.rate ?? -1;
+          return rateA - rateB;
+        }),
     }));
 
     list.sort((x, y) => x.staff_name.localeCompare(y.staff_name));
     return list;
-  }, [rows, nameById, payRateByStaffId]);
+  }, [rows, nameById]);
 
   const staffOptions = useMemo(() => {
     const list = profiles
@@ -679,7 +670,9 @@ export default function OwnerStaffSummaryPage() {
               }}
             >
               <div style={{ fontSize: 12, color: MUTED }}>Total hours</div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_BLUE }}>{overallSummary.totalHours.toFixed(2)}h</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_BLUE }}>
+                {overallSummary.totalHours.toFixed(2)}h
+              </div>
             </div>
 
             <div
@@ -692,7 +685,9 @@ export default function OwnerStaffSummaryPage() {
               }}
             >
               <div style={{ fontSize: 12, color: MUTED }}>Total pay</div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_RED }}>{money(overallSummary.totalPay)}</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_RED }}>
+                {money(overallSummary.totalPay)}
+              </div>
             </div>
           </div>
         </div>
@@ -714,12 +709,9 @@ export default function OwnerStaffSummaryPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               {perStaffSummary.map((s) => {
-                const weekdayHours = round2(s.weekdayMin / 60);
-                const saturdayHours = round2(s.saturdayMin / 60);
-                const sundayHours = round2(s.sundayMin / 60);
-
-                const totalHours = round2((s.weekdayMin + s.saturdayMin + s.sundayMin) / 60);
-                const totalPay = round2(s.weekdayPay + s.saturdayPay + s.sundayPay);
+                const totalMinutes = s.groups.reduce((sum, g) => sum + g.minutes, 0);
+                const totalPay = s.groups.reduce((sum, g) => sum + g.pay, 0);
+                const totalHours = round2(totalMinutes / 60);
 
                 return (
                   <div
@@ -742,7 +734,9 @@ export default function OwnerStaffSummaryPage() {
                         marginBottom: 12,
                       }}
                     >
-                      <div style={{ fontWeight: 900, fontSize: 20, color: TEXT }}>{s.staff_name}</div>
+                      <div style={{ fontWeight: 900, fontSize: 20, color: TEXT }}>
+                        {s.staff_name}
+                      </div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                         <div
                           style={{
@@ -766,7 +760,7 @@ export default function OwnerStaffSummaryPage() {
                             color: MUTED,
                           }}
                         >
-                          Total pay: <b style={{ color: TEXT }}>{money(totalPay)}</b>
+                          Total pay: <b style={{ color: TEXT }}>{money(round2(totalPay))}</b>
                         </div>
                       </div>
                     </div>
@@ -800,59 +794,61 @@ export default function OwnerStaffSummaryPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              Weekday
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {weekdayHours.toFixed(2)}
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {s.weekdayRate === null ? "-" : money(s.weekdayRate)}
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {money(s.weekdayPay)}
-                            </td>
-                          </tr>
+                          {s.groups.map((g, idx) => {
+                            const hours = round2(g.minutes / 60);
+
+                            return (
+                              <tr key={`${g.dayType}-${g.rate ?? "null"}-${idx}`}>
+                                <td
+                                  style={{
+                                    padding: "10px 10px",
+                                    borderBottom: `1px solid ${BORDER}`,
+                                    color: TEXT,
+                                  }}
+                                >
+                                  {dayTypeLabel(g.dayType)}
+                                </td>
+                                <td
+                                  style={{
+                                    padding: "10px 10px",
+                                    borderBottom: `1px solid ${BORDER}`,
+                                    color: TEXT,
+                                  }}
+                                >
+                                  {hours.toFixed(2)}
+                                </td>
+                                <td
+                                  style={{
+                                    padding: "10px 10px",
+                                    borderBottom: `1px solid ${BORDER}`,
+                                    color: TEXT,
+                                  }}
+                                >
+                                  {g.rate === null ? "-" : money(g.rate)}
+                                </td>
+                                <td
+                                  style={{
+                                    padding: "10px 10px",
+                                    borderBottom: `1px solid ${BORDER}`,
+                                    color: TEXT,
+                                  }}
+                                >
+                                  {money(g.pay)}
+                                </td>
+                              </tr>
+                            );
+                          })}
 
                           <tr>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              Saturday
+                            <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>
+                              Total
                             </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {saturdayHours.toFixed(2)}
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {s.saturdayRate === null ? "-" : money(s.saturdayRate)}
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {money(s.saturdayPay)}
-                            </td>
-                          </tr>
-
-                          <tr>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              Sunday
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {sundayHours.toFixed(2)}
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {s.sundayRate === null ? "-" : money(s.sundayRate)}
-                            </td>
-                            <td style={{ padding: "10px 10px", borderBottom: `1px solid ${BORDER}`, color: TEXT }}>
-                              {money(s.sundayPay)}
-                            </td>
-                          </tr>
-
-                          <tr>
-                            <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>Total</td>
                             <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>
                               {totalHours.toFixed(2)}
                             </td>
                             <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>-</td>
                             <td style={{ padding: "12px 10px", fontWeight: 800, color: TEXT }}>
-                              {money(totalPay)}
+                              {money(round2(totalPay))}
                             </td>
                           </tr>
                         </tbody>

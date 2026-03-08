@@ -3,6 +3,13 @@ import { supabase } from "../../lib/supabaseClient";
 
 type Profile = { id: string; full_name: string | null };
 
+type StaffPayRate = {
+  staff_id: string;
+  weekday_rate: number | null;
+  saturday_rate: number | null;
+  sunday_rate: number | null;
+};
+
 type ShiftCostRow = {
   shift_id: number;
   store_id: string;
@@ -282,6 +289,23 @@ export default function RosterWeek() {
   function staffName(id: string) {
     const p = profiles.find((x) => x.id === id);
     return p?.full_name?.trim() ? p.full_name : id.slice(0, 8);
+  }
+
+  async function getHourlyRateForShift(staffId: string, shiftStartISO: string): Promise<number> {
+    const { data, error } = await supabase
+      .from("staff_pay_rates")
+      .select("weekday_rate, saturday_rate, sunday_rate")
+      .eq("staff_id", staffId)
+      .single();
+
+    if (error || !data) {
+      throw new Error("Could not find pay rate for this staff member.");
+    }
+
+    const day = new Date(shiftStartISO).getDay(); // 0=Sun, 6=Sat
+    if (day === 6) return Number(data.saturday_rate ?? 0);
+    if (day === 0) return Number(data.sunday_rate ?? 0);
+    return Number(data.weekday_rate ?? 0);
   }
 
   async function loadProfiles() {
@@ -695,6 +719,14 @@ export default function RosterWeek() {
     const { data: userData } = await supabase.auth.getUser();
     const uid = userData.user?.id ?? null;
 
+    let hourlyRate = 0;
+    try {
+      hourlyRate = await getHourlyRateForShift(drawerStaffId, startISO);
+    } catch (e: any) {
+      setMsg("❌ " + (e?.message ?? "Could not determine hourly rate."));
+      return;
+    }
+
     if (drawerMode === "add") {
       const ins = await supabase.from("shifts").insert(
         [
@@ -704,6 +736,7 @@ export default function RosterWeek() {
             shift_start: startISO,
             shift_end: endISO,
             break_minutes: 0,
+            hourly_rate: hourlyRate,
             created_by: uid,
           },
         ],
@@ -732,6 +765,7 @@ export default function RosterWeek() {
         shift_start: startISO,
         shift_end: endISO,
         break_minutes: 0,
+        hourly_rate: hourlyRate,
       })
       .eq("id", drawerShiftId);
 
@@ -1556,8 +1590,12 @@ export default function RosterWeek() {
           }}
         >
           <h3 style={{ marginTop: 0, color: TEXT }}>Store Summary (Week)</h3>
-          <div style={{ color: TEXT, marginBottom: 6 }}>Total Hours: <b>{storeTotalHours.toFixed(2)}</b></div>
-          <div style={{ color: TEXT }}>Total Wage: <b>${storeTotalWage.toFixed(2)}</b></div>
+          <div style={{ color: TEXT, marginBottom: 6 }}>
+            Total Hours: <b>{storeTotalHours.toFixed(2)}</b>
+          </div>
+          <div style={{ color: TEXT }}>
+            Total Wage: <b>${storeTotalWage.toFixed(2)}</b>
+          </div>
         </div>
 
         <div
@@ -1591,7 +1629,6 @@ export default function RosterWeek() {
             <li>Click empty cell space to add a shift.</li>
             <li>Click a shift card to edit that shift.</li>
             <li>Click the unavailable block to manage weekly rules and skips.</li>
-            
           </ul>
         </div>
       </div>
