@@ -3,13 +3,6 @@ import { supabase } from "../../lib/supabaseClient";
 
 type Profile = { id: string; full_name: string | null };
 
-type StaffPayRate = {
-  staff_id: string;
-  weekday_rate: number | null;
-  saturday_rate: number | null;
-  sunday_rate: number | null;
-};
-
 type ShiftCostRow = {
   shift_id: number;
   store_id: string;
@@ -20,6 +13,16 @@ type ShiftCostRow = {
   hours_worked: number;
   applied_rate: number | null;
   estimated_wage: number | null;
+};
+
+type RawShiftRow = {
+  id: number;
+  store_id: string;
+  staff_id: string;
+  shift_start: string;
+  shift_end: string;
+  break_minutes: number | null;
+  hourly_rate: number | null;
 };
 
 type UnavailOneOffRow = {
@@ -91,6 +94,12 @@ function addDaysISO(iso: string, days: number) {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + days);
   return toISODate(d);
+}
+
+function shiftISOByDays(iso: string, days: number) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
 }
 
 function weekRangeText(weekStartISO: string) {
@@ -243,7 +252,6 @@ function inputStyle(width?: number | string) {
 
 export default function RosterWeek() {
   const [storeId] = useState("MOOROOLBARK");
-
   const [weekStart, setWeekStart] = useState(() => getThisWeekThuISO());
 
   const range = useMemo(() => {
@@ -271,6 +279,7 @@ export default function RosterWeek() {
 
   const [isPublished, setIsPublished] = useState<boolean>(false);
   const [pubLoading, setPubLoading] = useState<boolean>(false);
+  const [copyLoading, setCopyLoading] = useState<boolean>(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"shift" | "unavail">("shift");
@@ -302,7 +311,7 @@ export default function RosterWeek() {
       throw new Error("Could not find pay rate for this staff member.");
     }
 
-    const day = new Date(shiftStartISO).getDay(); // 0=Sun, 6=Sat
+    const day = new Date(shiftStartISO).getDay();
     if (day === 6) return Number(data.saturday_rate ?? 0);
     if (day === 0) return Number(data.sunday_rate ?? 0);
     return Number(data.weekday_rate ?? 0);
@@ -399,14 +408,6 @@ export default function RosterWeek() {
     setRecOverrides((r.data ?? []) as any);
   }
 
-  async function loadAll() {
-    await loadProfiles();
-    await loadShiftCosts();
-    await loadOneOffUnavailability();
-    await loadRecurringRules();
-    await loadRecurringOverrides();
-  }
-
   async function loadPublishedStatus() {
     const r = await supabase
       .from("roster_weeks")
@@ -421,6 +422,139 @@ export default function RosterWeek() {
       return;
     }
     setIsPublished(!!r.data?.published);
+  }
+
+  async function loadAll() {
+    await loadProfiles();
+    await loadShiftCosts();
+    await loadOneOffUnavailability();
+    await loadRecurringRules();
+    await loadRecurringOverrides();
+    await loadPublishedStatus();
+  }
+
+  function getWeekBounds(weekStartISO: string) {
+    const start = new Date(weekStartISO + "T00:00:00");
+    const end = new Date(start);
+    end.setDate(start.getDate() + 7);
+    return { startISO: start.toISOString(), endISO: end.toISOString() };
+  }
+
+  async function getRawShiftsForWeek(weekStartISO: string): Promise<RawShiftRow[]> {
+    const { startISO, endISO } = getWeekBounds(weekStartISO);
+
+    const r = await supabase
+      .from("shifts")
+      .select("id, store_id, staff_id, shift_start, shift_end, break_minutes, hourly_rate")
+      .eq("store_id", storeId)
+      .gte("shift_start", startISO)
+      .lt("shift_start", endISO)
+      .order("shift_start", { ascending: true });
+
+    if (r.error) throw r.error;
+    return (r.data ?? []) as RawShiftRow[];
+  }
+
+  async function weekHasAnyShifts(weekStartISO: string): Promise<boolean> {
+    const { startISO, endISO } = getWeekBounds(weekStartISO);
+
+    const r = await supabase
+      .from("shifts")
+      .select("id")
+      .eq("store_id", storeId)
+      .gte("shift_start", startISO)
+      .lt("shift_start", endISO)
+      .limit(1);
+
+    if (r.error) throw r.error;
+    return (r.data ?? []).length > 0;
+  }
+
+  async function copyWeekShifts(sourceWeekStartISO: string, targetWeekStartISO: string) {
+    const targetHas = await weekHasAnyShifts(targetWeekStartISO);
+    if (targetHas) {
+      return { ok: false, reason: "TARGET_NOT_EMPTY" as const };
+    }
+
+    const sourceShifts = await getRawShiftsForWeek(sourceWeekStartISO);
+    if (sourceShifts.length === 0) {
+      return { ok: false, reason: "SOURCE_EMPTY" as const };
+    }
+
+    const { data: userData } = await supabase.auth.getUser();
+    const uid = userData.user?.id ?? null;
+
+    const sourceDate = new Date(sourceWeekStartISO + "T00:00:00");
+    const targetDate = new Date(targetWeekStartISO + "T00:00:00");
+    const diffDays = Math.round((targetDate.getTime() - sourceDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    const insertRows = sourceShifts.map((s) => ({
+      store_id: s.store_id,
+      staff_id: s.staff_id,
+      shift_start: shiftISOByDays(s.shift_start, diffDays),
+      shift_end: shiftISOByDays(s.shift_end, diffDays),
+      break_minutes: s.break_minutes ?? 0,
+      hourly_rate: s.hourly_rate ?? 0,
+      created_by: uid,
+    }));
+
+    const ins = await supabase.from("shifts").insert(insertRows, { returning: "minimal" } as any);
+    if (ins.error) throw ins.error;
+
+    return { ok: true, count: insertRows.length };
+  }
+
+  async function handleNextWeek() {
+    try {
+      setCopyLoading(true);
+      const nextWeek = addDaysISO(weekStart, 7);
+
+      const nextHas = await weekHasAnyShifts(nextWeek);
+      if (!nextHas) {
+        const result = await copyWeekShifts(weekStart, nextWeek);
+
+        if (result.ok) {
+          setMsg(`✅ Copied ${result.count} shift(s) to next week.`);
+        } else if (result.reason === "SOURCE_EMPTY") {
+          setMsg("ℹ️ Current week has no shifts, so next week stays empty.");
+        }
+      }
+
+      setWeekStart(nextWeek);
+    } catch (e: any) {
+      setMsg("❌ Failed to open next week: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setCopyLoading(false);
+    }
+  }
+
+  async function handleCopyFromPreviousWeek() {
+    try {
+      setCopyLoading(true);
+      setMsg("");
+
+      const currentHas = await weekHasAnyShifts(weekStart);
+      if (currentHas) {
+        setMsg("ℹ️ This week already has shifts, so nothing was copied.");
+        return;
+      }
+
+      const prevWeek = addDaysISO(weekStart, -7);
+      const result = await copyWeekShifts(prevWeek, weekStart);
+
+      if (result.ok) {
+        setMsg(`✅ Copied ${result.count} shift(s) from previous week.`);
+        await loadShiftCosts();
+      } else if (result.reason === "SOURCE_EMPTY") {
+        setMsg("ℹ️ Previous week has no shifts to copy.");
+      } else if (result.reason === "TARGET_NOT_EMPTY") {
+        setMsg("ℹ️ This week already has shifts, so nothing was copied.");
+      }
+    } catch (e: any) {
+      setMsg("❌ Copy failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setCopyLoading(false);
+    }
   }
 
   async function publishWeek() {
@@ -1218,13 +1352,23 @@ export default function RosterWeek() {
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {actionButton("← Prev Week", () => setWeekStart((w) => addDaysISO(w, -7)))}
-              {actionButton("This Week", () => setWeekStart(getThisWeekThuISO()), { primary: true })}
-              {actionButton("Next Week →", () => setWeekStart((w) => addDaysISO(w, 7)))}
-              {actionButton("Refresh", loadAll)}
+              {actionButton("← Prev Week", () => setWeekStart((w) => addDaysISO(w, -7)), {
+                disabled: copyLoading,
+              })}
+              {actionButton("This Week", () => setWeekStart(getThisWeekThuISO()), {
+                primary: true,
+                disabled: copyLoading,
+              })}
+              {actionButton("Next Week →", handleNextWeek, {
+                disabled: copyLoading,
+              })}
+              {actionButton("Copy from previous week", handleCopyFromPreviousWeek, {
+                disabled: copyLoading,
+              })}
+              {actionButton("Refresh", loadAll, { disabled: copyLoading })}
               {!isPublished
-                ? actionButton("Publish this week", publishWeek, { primary: true, disabled: pubLoading })
-                : actionButton("Unpublish", unpublishWeek, { danger: true, disabled: pubLoading })}
+                ? actionButton("Publish this week", publishWeek, { primary: true, disabled: pubLoading || copyLoading })
+                : actionButton("Unpublish", unpublishWeek, { danger: true, disabled: pubLoading || copyLoading })}
             </div>
           </div>
 
@@ -1629,6 +1773,8 @@ export default function RosterWeek() {
             <li>Click empty cell space to add a shift.</li>
             <li>Click a shift card to edit that shift.</li>
             <li>Click the unavailable block to manage weekly rules and skips.</li>
+            <li>Next Week will auto-copy this week only when next week is empty.</li>
+            <li>Copy from previous week will only work when this week is empty.</li>
           </ul>
         </div>
       </div>
