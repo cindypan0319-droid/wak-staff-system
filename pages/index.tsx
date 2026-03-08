@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Head from "next/head";
 import { supabase } from "../lib/supabaseClient";
 
 type DirRow = {
@@ -34,7 +35,7 @@ export default function Home() {
       return;
     }
 
-    const rows = (res.data ?? []) as any as DirRow[];
+    const rows = (res.data ?? []) as DirRow[];
     rows.sort((a, b) => displayName(a).localeCompare(displayName(b)));
     setDirectory(rows);
 
@@ -50,21 +51,34 @@ export default function Home() {
     setLoading(true);
     setMsg("");
     try {
-      if (!staffId) return setMsg("❌ Please select your name.");
-      if (pin.trim().length < 1) return setMsg("❌ Please enter your PIN.");
+      if (!staffId) {
+        setMsg("❌ Please select your name.");
+        return;
+      }
+
+      if (pin.trim().length < 1) {
+        setMsg("❌ Please enter your PIN.");
+        return;
+      }
 
       const resp = await fetch("/api/pin-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ staff_id: staffId, pin: pin }),
+        body: JSON.stringify({ staff_id: staffId, pin }),
       });
 
       const data = await resp.json();
-      if (!resp.ok) return setMsg("❌ " + (data?.error ?? "Login failed"));
 
-      // ✅ New flow: backend returns action_link, we redirect (flash) to create session
+      if (!resp.ok) {
+        setMsg("❌ " + (data?.error ?? "Login failed"));
+        return;
+      }
+
       const actionLink = data.action_link;
-      if (!actionLink) return setMsg("❌ No login link returned from server.");
+      if (!actionLink) {
+        setMsg("❌ No login link returned from server.");
+        return;
+      }
 
       window.location.href = actionLink;
     } finally {
@@ -73,64 +87,72 @@ export default function Home() {
   }
 
   return (
-    <div style={{ padding: 20, maxWidth: 520 }}>
-      <h1>Wot A Kebab - Mooroolbark</h1>
+    <>
+      <Head>
+        <title>WAK Staff System</title>
+        <meta name="application-name" content="WAK Staff System" />
+        <meta name="apple-mobile-web-app-title" content="WAK Staff System" />
+      </Head>
 
-      {msg && (
-        <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>
-          {msg}
-        </div>
-      )}
+      <div style={{ padding: 20, maxWidth: 520 }}>
+        <h1>Wot A Kebab - Mooroolbark</h1>
 
-      <div style={{ border: "1px solid #ddd", padding: 12 }}>
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>Select your name</div>
-          <select
-            value={staffId}
-            onChange={(e) => setStaffId(e.target.value)}
-            style={{ width: "100%" }}
+        {msg && (
+          <div style={{ border: "1px solid #ddd", padding: 10, marginBottom: 12 }}>
+            {msg}
+          </div>
+        )}
+
+        <div style={{ border: "1px solid #ddd", padding: 12 }}>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: "#666" }}>Select your name</div>
+            <select
+              value={staffId}
+              onChange={(e) => setStaffId(e.target.value)}
+              style={{ width: "100%" }}
+            >
+              {directory.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {displayName(r)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: "#666" }}>PIN (any length)</div>
+            <input
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              style={{ width: "100%", fontSize: 18 }}
+            />
+          </div>
+
+          <button
+            onClick={pinLogin}
+            disabled={loading}
+            style={{ width: "100%", fontWeight: 800 }}
           >
-            {directory.map((r) => (
-              <option key={r.id} value={r.id}>
-                {displayName(r)}
-              </option>
-            ))}
-          </select>
+            {loading ? "Logging in…" : "Login"}
+          </button>
+
+          <button
+            onClick={loadDirectory}
+            disabled={loading}
+            style={{ width: "100%", marginTop: 8 }}
+          >
+            Refresh staff list
+          </button>
         </div>
 
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 12, color: "#666" }}>PIN (any length)</div>
-          <input
-            value={pin}
-            onChange={(e) => setPin(e.target.value)}
-            style={{ width: "100%", fontSize: 18 }}
-          />
-        </div>
+        <p style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
+          If your account is deactivated, you cannot login.
+        </p>
 
-        <button
-          onClick={pinLogin}
-          disabled={loading}
-          style={{ width: "100%", fontWeight: 800 }}
-        >
-          {loading ? "Logging in…" : "Login"}
-        </button>
-
-        <button
-          onClick={loadDirectory}
-          disabled={loading}
-          style={{ width: "100%", marginTop: 8 }}
-        >
-          Refresh staff list
-        </button>
+        <p style={{ marginTop: 8, fontSize: 12 }}>
+          <a href="/admin-login">Emergency admin login</a>
+        </p>
       </div>
-
-      <p style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
-        If your account is deactivated, you cannot login.
-      </p>
-
-      <p style={{ marginTop: 8, fontSize: 12 }}>
-        <a href="/admin-login">Emergency admin login</a>
-      </p>
-    </div>
+    </>
   );
 }
