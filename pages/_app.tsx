@@ -1,6 +1,7 @@
 import type { AppProps } from "next/app";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import Head from "next/head";
 
 export default function App({ Component, pageProps }: AppProps) {
   const [checking, setChecking] = useState(true);
@@ -57,8 +58,42 @@ export default function App({ Component, pageProps }: AppProps) {
 
   // Small loading screen to avoid flicker
   if (checking) {
-    return <div style={{ padding: 20 }}>Loading…</div>;
+    return (
+      <>
+        <Head>
+          <title>WAK Staff</title>
+          <meta name="theme-color" content="#1E5A9E" />
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+          <meta name="apple-mobile-web-app-capable" content="yes" />
+          <meta name="mobile-web-app-capable" content="yes" />
+          <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+          <meta name="apple-mobile-web-app-title" content="WAK Staff" />
+          <link rel="manifest" href="/manifest.json" />
+          <link rel="icon" href="/icon-192.png" />
+          <link rel="apple-touch-icon" href="/icon-192.png" />
+        </Head>
+
+        <div style={{ padding: 20 }}>Loading…</div>
+      </>
+    );
   }
 
-  return <Component {...pageProps} />;
+  return (
+    <>
+      <Head>
+        <title>WAK Staff</title>
+        <meta name="theme-color" content="#1E5A9E" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-title" content="WAK Staff" />
+        <link rel="manifest" href="/manifest.json" />
+        <link rel="icon" href="/icon-192.png" />
+        <link rel="apple-touch-icon" href="/icon-192.png" />
+      </Head>
+
+      <Component {...pageProps} />
+    </>
+  );
 }
