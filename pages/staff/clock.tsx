@@ -38,9 +38,33 @@ export default function StaffClockPage() {
   const [openShift, setOpenShift] = useState<TimeClockRow | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
 
+  const [storeAccessLoading, setStoreAccessLoading] = useState(true);
+  const [isStoreDevice, setIsStoreDevice] = useState(false);
+  const [detectedIp, setDetectedIp] = useState("");
+
   const canUseClock = useMemo(() => {
     return role === "STAFF" || role === "MANAGER" || role === "OWNER";
   }, [role]);
+
+  const canOperateClock = canUseClock && isStoreDevice;
+
+  useEffect(() => {
+    async function checkStoreAccess() {
+      try {
+        const res = await fetch("/api/check-store-access");
+        const data = await res.json();
+
+        if (!data.allowed) {
+          window.location.href = "/staff/home";
+        }
+      } catch (error) {
+        console.log("check store access error:", error);
+        window.location.href = "/staff/home";
+      }
+    }
+
+    checkStoreAccess();
+  }, []);
 
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
@@ -53,6 +77,26 @@ export default function StaffClockPage() {
     });
 
     return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    async function checkStoreAccess() {
+      setStoreAccessLoading(true);
+      try {
+        const res = await fetch("/api/check-store-access");
+        const data = await res.json();
+        setIsStoreDevice(!!data.allowed);
+        setDetectedIp(data.ip || "");
+      } catch (error) {
+        console.log("check store access error:", error);
+        setIsStoreDevice(false);
+        setDetectedIp("");
+      } finally {
+        setStoreAccessLoading(false);
+      }
+    }
+
+    checkStoreAccess();
   }, []);
 
   useEffect(() => {
@@ -137,6 +181,11 @@ export default function StaffClockPage() {
         return;
       }
 
+      if (!canOperateClock) {
+        setMsg("Clock in is only available on the store device / store network.");
+        return;
+      }
+
       if (openShift) {
         setMsg("You are already clocked in.");
         return;
@@ -147,7 +196,7 @@ export default function StaffClockPage() {
         shift_id: null as any,
         clock_in_at: new Date().toISOString(),
         clock_out_at: null,
-        device_tag: "web",
+        device_tag: detectedIp ? `store-ip:${detectedIp}` : "web",
       };
 
       const { error } = await supabase
@@ -170,6 +219,11 @@ export default function StaffClockPage() {
     setMsg("");
     setLoading(true);
     try {
+      if (!canOperateClock) {
+        setMsg("Clock out is only available on the store device / store network.");
+        return;
+      }
+
       if (!openShift) {
         setMsg("No open shift found.");
         return;
@@ -223,6 +277,19 @@ export default function StaffClockPage() {
           Logged in as: <b>{userName}</b> | Role: <b>{role}</b>
         </div>
 
+        <div
+          style={{
+            marginBottom: 14,
+            fontSize: 15,
+            color: "#333",
+            background: isStoreDevice ? "#ecfdf5" : "#fff7ed",
+            border: `1px solid ${isStoreDevice ? "#bbf7d0" : "#fed7aa"}`,
+            borderRadius: 10,
+            padding: "12px 14px",
+          }}
+        >
+        </div>
+
         <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
           <Link href="/staff/home">
             <button
@@ -273,7 +340,7 @@ export default function StaffClockPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <button
                 onClick={clockIn}
-                disabled={loading || !!openShift}
+                disabled={loading || !!openShift || !canOperateClock || storeAccessLoading}
                 style={{
                   width: "100%",
                   padding: "18px 20px",
@@ -281,9 +348,15 @@ export default function StaffClockPage() {
                   fontWeight: 800,
                   borderRadius: 14,
                   border: "none",
-                  background: loading || !!openShift ? "#93c5fd" : theme.colors.primary,
+                  background:
+                    loading || !!openShift || !canOperateClock || storeAccessLoading
+                      ? "#93c5fd"
+                      : theme.colors.primary,
                   color: "#fff",
-                  cursor: loading || !!openShift ? "not-allowed" : "pointer",
+                  cursor:
+                    loading || !!openShift || !canOperateClock || storeAccessLoading
+                      ? "not-allowed"
+                      : "pointer",
                   boxShadow: "0 6px 16px rgba(37,99,235,0.25)",
                 }}
               >
@@ -292,7 +365,7 @@ export default function StaffClockPage() {
 
               <button
                 onClick={clockOut}
-                disabled={loading || !openShift}
+                disabled={loading || !openShift || !canOperateClock || storeAccessLoading}
                 style={{
                   width: "100%",
                   padding: "18px 20px",
@@ -300,14 +373,37 @@ export default function StaffClockPage() {
                   fontWeight: 800,
                   borderRadius: 14,
                   border: "none",
-                  background: loading || !openShift ? "#fca5a5" : theme.colors.danger,
+                  background:
+                    loading || !openShift || !canOperateClock || storeAccessLoading
+                      ? "#fca5a5"
+                      : theme.colors.danger,
                   color: "#fff",
-                  cursor: loading || !openShift ? "not-allowed" : "pointer",
+                  cursor:
+                    loading || !openShift || !canOperateClock || storeAccessLoading
+                      ? "not-allowed"
+                      : "pointer",
                   boxShadow: "0 6px 16px rgba(220,38,38,0.22)",
                 }}
               >
                 {loading && !!openShift ? "Processing..." : "CLOCK OUT"}
               </button>
+
+              {!storeAccessLoading && !isStoreDevice && (
+                <div
+                  style={{
+                    marginTop: 4,
+                    padding: "12px 14px",
+                    borderRadius: 10,
+                    background: "#fff7ed",
+                    border: "1px solid #fed7aa",
+                    color: "#9a3412",
+                    fontSize: 14,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  You can view this page anywhere, but time clock actions are locked outside the store network.
+                </div>
+              )}
             </div>
           )}
         </div>

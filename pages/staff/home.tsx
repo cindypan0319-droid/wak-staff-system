@@ -171,6 +171,7 @@ export default function StaffHomePage() {
   const [email, setEmail] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [msg, setMsg] = useState("");
+  const [isStoreDevice, setIsStoreDevice] = useState(false);
 
   const isOwner = useMemo(() => role === "OWNER", [role]);
   const isManager = useMemo(() => role === "MANAGER", [role]);
@@ -234,6 +235,21 @@ export default function StaffHomePage() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    async function checkStoreAccess() {
+      try {
+        const res = await fetch("/api/check-store-access");
+        const data = await res.json();
+        setIsStoreDevice(!!data.allowed);
+      } catch (error) {
+        console.log("check store access error:", error);
+        setIsStoreDevice(false);
+      }
+    }
+
+    checkStoreAccess();
+  }, []);
 
   useEffect(() => {
     loadMe();
@@ -393,10 +409,17 @@ export default function StaffHomePage() {
               gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
             }}
           >
-            <CardButton title="Time Clock" desc="Clock in / clock out" href="/staff/clock" />
-            <CardButton title="Daily Entry" desc="Enter daily numbers" href="/staff/daily-entry" />
-            <CardButton title="My Clock History" desc="Check my own records" href="/staff/clock-history" />
+            {isStoreDevice && (
+              <CardButton title="Time Clock" desc="Clock in / clock out" href="/staff/clock" />
+            )}
+
+            {isStoreDevice && (
+              <CardButton title="Daily Entry" desc="Enter daily numbers" href="/staff/daily-entry" />
+            )}
+
             <CardButton title="My Roster" desc="Check my shifts" href="/staff/my-roster" />
+            <CardButton title="My Clock History" desc="Check my own records" href="/staff/clock-history" />
+            
           </div>
         </SectionBlock>
 

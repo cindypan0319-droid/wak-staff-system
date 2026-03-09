@@ -139,6 +139,10 @@ export default function DailyEntryPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
+  const [storeAccessLoading, setStoreAccessLoading] = useState(true);
+  const [isStoreDevice, setIsStoreDevice] = useState(false);
+  const [detectedIp, setDetectedIp] = useState("");
+
   const [date, setDate] = useState(todayDateInputValue());
 
   const [platforms, setPlatforms] = useState<Platform[]>([]);
@@ -192,6 +196,44 @@ export default function DailyEntryPage() {
   }, [platformGrossText]);
 
   const total = useMemo(() => round2(instoreSubtotal + onlineSubtotal), [instoreSubtotal, onlineSubtotal]);
+
+  useEffect(() => {
+    async function checkStoreAccess() {
+      try {
+        const res = await fetch("/api/check-store-access");
+        const data = await res.json();
+
+        if (!data.allowed) {
+          window.location.href = "/staff/home";
+        }
+      } catch (error) {
+        console.log("check store access error:", error);
+        window.location.href = "/staff/home";
+      }
+    }
+
+    checkStoreAccess();
+  }, []);
+
+  useEffect(() => {
+    async function checkStoreAccess() {
+      setStoreAccessLoading(true);
+      try {
+        const res = await fetch("/api/check-store-access");
+        const data = await res.json();
+        setIsStoreDevice(!!data.allowed);
+        setDetectedIp(data.ip || "");
+      } catch (error) {
+        console.log("check store access error:", error);
+        setIsStoreDevice(false);
+        setDetectedIp("");
+      } finally {
+        setStoreAccessLoading(false);
+      }
+    }
+
+    checkStoreAccess();
+  }, []);
 
   function setCountsField(
     setter: (fn: (prev: CashCounts) => CashCounts) => void,
@@ -338,6 +380,11 @@ export default function DailyEntryPage() {
     setMsg("");
 
     try {
+      if (!isStoreDevice) {
+        setMsg("❌ Daily entry can only be saved on the store device / store network.");
+        return;
+      }
+
       const { data } = await supabase.auth.getUser();
       const uid = data.user?.id ?? null;
       if (!uid) {
@@ -386,6 +433,11 @@ export default function DailyEntryPage() {
     setMsg("");
 
     try {
+      if (!isStoreDevice) {
+        setMsg("❌ Daily entry can only be saved on the store device / store network.");
+        return;
+      }
+
       const { data } = await supabase.auth.getUser();
       const uid = data.user?.id ?? null;
       if (!uid) {
@@ -630,7 +682,6 @@ export default function DailyEntryPage() {
                 border: "1px solid #D1D5DB",
                 fontSize: 15,
                 background: "#fff",
-                display: "block",
               }}
               inputMode="numeric"
             />
@@ -639,6 +690,8 @@ export default function DailyEntryPage() {
       </div>
     );
   }
+
+  const pageReadOnly = !isStoreDevice;
 
   return (
     <div
@@ -691,6 +744,18 @@ export default function DailyEntryPage() {
           </div>
         </div>
 
+        <div
+          style={{
+            border: `1px solid ${isStoreDevice ? "#bbf7d0" : "#fed7aa"}`,
+            background: isStoreDevice ? "#ecfdf5" : "#fff7ed",
+            padding: "12px 14px",
+            borderRadius: 12,
+            marginBottom: 16,
+            color: TEXT,
+          }}
+        >
+        </div>
+
         {msg && (
           <div
             style={{
@@ -728,7 +793,7 @@ export default function DailyEntryPage() {
             <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
               {actionButton("Save Morning Cashup", saveMorning, {
                 primary: true,
-                disabled: loading,
+                disabled: loading || pageReadOnly || storeAccessLoading,
               })}
             </div>
           </>,
@@ -851,7 +916,7 @@ export default function DailyEntryPage() {
 
             <div style={{ marginBottom: 16 }}>
               {actionButton("Set Cash Sales = Should Remove", useCashToRemoveAsCashSales, {
-                disabled: loading,
+                disabled: loading || pageReadOnly || storeAccessLoading,
               })}
             </div>
 
@@ -1027,7 +1092,7 @@ export default function DailyEntryPage() {
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               {actionButton("Save Closing (Cashup + Sales)", saveClosingAndSales, {
                 primary: true,
-                disabled: loading,
+                disabled: loading || pageReadOnly || storeAccessLoading,
               })}
             </div>
           </>
