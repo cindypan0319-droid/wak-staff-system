@@ -342,7 +342,7 @@ export default function EmployeeDetailsPage() {
             }}
           >
             <div>
-              <h1 style={{ margin: 0, color: TEXT }}>Employee Details</h1>
+              <h1 style={{ margin: 0, color: TEXT }}>{profile?.preferred_name || profile?.full_name} — Employee Details</h1>
               <div style={{ marginTop: 6, color: MUTED, fontSize: 14 }}>
                 View and edit employee personal details and internal notes
               </div>
@@ -364,7 +364,8 @@ export default function EmployeeDetailsPage() {
               color: TEXT,
             }}
           >
-            Staff ID: <b>{staffId || "-"}</b>
+            Employee: <b>{profile?.preferred_name || profile?.full_name || "-"}</b>
+
             {profile?.role ? (
               <>
                 {" "}
