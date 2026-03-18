@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabaseClient";
+import { useRouter } from "next/router";
 
 type ProfileRow = {
   id: string;
@@ -150,7 +151,8 @@ export default function EmployeeDetailsPage() {
 
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
-
+  const router = useRouter();
+  
   async function guard() {
     const { data } = await supabase.auth.getUser();
     const uid = data.user?.id;
@@ -588,7 +590,7 @@ export default function EmployeeDetailsPage() {
 
             <div style={{ marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" }}>
               {actionButton("Save", saveAll, { primary: true, disabled: loading })}
-              {actionButton("Back", () => window.history.back(), { disabled: loading })}
+              {actionButton("Back", () => router.push("/manager/employees"), { disabled: loading })}
             </div>
           </>
         )}
