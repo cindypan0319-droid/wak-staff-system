@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
+import type { GetServerSideProps } from "next";
 import { supabase } from "../lib/supabaseClient";
 
 type DirRow = {
   id: string;
   full_name: string | null;
   preferred_name: string | null;
+  is_active?: boolean;
 };
 
 function displayName(r: DirRow) {
@@ -16,34 +18,111 @@ function displayName(r: DirRow) {
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
+  const [listLoading, setListLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
   const [directory, setDirectory] = useState<DirRow[]>([]);
   const [staffId, setStaffId] = useState<string>("");
   const [pin, setPin] = useState<string>("");
 
-  async function loadDirectory() {
-    const res = await supabase
-      .from("profiles")
-      .select("id, full_name, preferred_name")
-      .eq("is_active", true);
+  const loadingDirectoryRef = useRef(false);
 
-    if (res.error) {
-      setMsg("❌ Cannot load staff list: " + res.error.message);
-      setDirectory([]);
-      return;
+  const sortedDirectory = useMemo(() => {
+    return [...directory].sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  }, [directory]);
+
+  const clearBrokenSession = useCallback(async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData.session;
+
+      if (!session) return;
+
+      const { data: userData, error } = await supabase.auth.getUser();
+
+      if (error || !userData.user) {
+        await supabase.auth.signOut();
+      }
+    } catch {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignore
+      }
     }
+  }, []);
 
-    const rows = (res.data ?? []) as DirRow[];
-    rows.sort((a, b) => displayName(a).localeCompare(displayName(b)));
-    setDirectory(rows);
+  const loadDirectory = useCallback(
+    async (showLoading = true) => {
+      if (loadingDirectoryRef.current) return;
 
-    if (!staffId && rows.length > 0) setStaffId(rows[0].id);
-  }
+      loadingDirectoryRef.current = true;
+      if (showLoading) setListLoading(true);
+      setMsg("");
+
+      try {
+        await clearBrokenSession();
+
+        const res = await supabase
+          .from("profiles")
+          .select("id, full_name, preferred_name, is_active")
+          .eq("is_active", true);
+
+        if (res.error) {
+          setMsg("❌ Cannot load staff list: " + res.error.message);
+          setDirectory([]);
+          return;
+        }
+
+        const rows = ((res.data ?? []) as DirRow[]).sort((a, b) =>
+          displayName(a).localeCompare(displayName(b))
+        );
+
+        setDirectory(rows);
+
+        setStaffId((prev) => {
+          if (prev && rows.some((r) => r.id === prev)) return prev;
+          return rows.length > 0 ? rows[0].id : "";
+        });
+      } finally {
+        loadingDirectoryRef.current = false;
+        setListLoading(false);
+      }
+    },
+    [clearBrokenSession]
+  );
 
   useEffect(() => {
-    loadDirectory();
-  }, []);
+    loadDirectory(true);
+
+    const onFocus = () => {
+      loadDirectory(false);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        loadDirectory(false);
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => {
+          reg.update().catch(() => {
+            // ignore
+          });
+        });
+      });
+    }
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [loadDirectory]);
 
   async function pinLogin() {
     setLoading(true);
@@ -60,9 +139,30 @@ export default function Home() {
         return;
       }
 
+      const activeCheck = await supabase
+        .from("profiles")
+        .select("id, is_active")
+        .eq("id", staffId)
+        .single();
+
+      if (activeCheck.error) {
+        setMsg("❌ Cannot verify selected staff: " + activeCheck.error.message);
+        return;
+      }
+
+      if (!activeCheck.data?.is_active) {
+        setMsg("❌ This account is deactivated. You cannot login.");
+        await loadDirectory(false);
+        return;
+      }
+
       const resp = await fetch("/api/pin-login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+          Pragma: "no-cache",
+        },
         body: JSON.stringify({ staff_id: staffId, pin }),
       });
 
@@ -80,7 +180,10 @@ export default function Home() {
         return;
       }
 
+      setPin("");
       window.location.href = actionLink;
+    } catch (err: any) {
+      setMsg("❌ " + (err?.message ?? "Login failed"));
     } finally {
       setLoading(false);
     }
@@ -92,6 +195,12 @@ export default function Home() {
         <title>WAK Staff System</title>
         <meta name="application-name" content="WAK Staff System" />
         <meta name="apple-mobile-web-app-title" content="WAK Staff System" />
+        <meta
+          httpEquiv="Cache-Control"
+          content="no-store, no-cache, must-revalidate, max-age=0"
+        />
+        <meta httpEquiv="Pragma" content="no-cache" />
+        <meta httpEquiv="Expires" content="0" />
       </Head>
 
       <div
@@ -101,19 +210,22 @@ export default function Home() {
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
+          padding: 20,
         }}
       >
         <div
           style={{
-            width: 360,
+            width: "100%",
+            maxWidth: 380,
             background: "white",
             padding: 30,
             borderRadius: 12,
             boxShadow: "0 10px 30px rgba(0,0,0,0.1)",
+            border: "1px solid #ececec",
           }}
         >
           <div style={{ textAlign: "center", marginBottom: 20 }}>
-            <img src="/logo.png" style={{ width: 300 }} />
+            <img src="/logo.png" alt="WAK logo" style={{ width: 300, maxWidth: "100%" }} />
           </div>
 
           <h2 style={{ textAlign: "center", marginBottom: 20 }}>
@@ -127,6 +239,8 @@ export default function Home() {
                 padding: 10,
                 marginBottom: 12,
                 fontSize: 14,
+                borderRadius: 8,
+                background: msg.startsWith("❌") ? "#fff7f7" : "#f8fbff",
               }}
             >
               {msg}
@@ -141,21 +255,26 @@ export default function Home() {
             <select
               value={staffId}
               onChange={(e) => setStaffId(e.target.value)}
+              disabled={loading || listLoading}
               style={{
-                    width: "100%",
-                    padding: "10px 12px",
-                    fontSize: 16,
-                    boxSizing: "border-box",
-                    border: "1px solid #ccc",
-                    borderRadius: 6,
-                    background: "#fff",
+                width: "100%",
+                padding: "10px 12px",
+                fontSize: 16,
+                boxSizing: "border-box",
+                border: "1px solid #ccc",
+                borderRadius: 6,
+                background: "#fff",
               }}
             >
-              {directory.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {displayName(r)}
-                </option>
-              ))}
+              {sortedDirectory.length === 0 ? (
+                <option value="">No active staff found</option>
+              ) : (
+                sortedDirectory.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {displayName(r)}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
@@ -165,45 +284,65 @@ export default function Home() {
             </div>
 
             <input
+              type="password"
+              inputMode="numeric"
+              autoComplete="current-password"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
+              disabled={loading || listLoading}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  pinLogin();
+                }
+              }}
               style={{
-                    width: "100%",
-                    padding: "10px 12px",
-                    fontSize: 16,
-                    boxSizing: "border-box",
-                    border: "1px solid #ccc",
-                    borderRadius: 6,
-                    background: "#fff",
+                width: "100%",
+                padding: "10px 12px",
+                fontSize: 16,
+                boxSizing: "border-box",
+                border: "1px solid #ccc",
+                borderRadius: 6,
+                background: "#fff",
               }}
             />
           </div>
 
           <button
             onClick={pinLogin}
-            disabled={loading}
+            disabled={loading || listLoading || sortedDirectory.length === 0}
             style={{
               width: "100%",
               padding: 10,
               fontSize: 16,
               fontWeight: 700,
-              background: "#1e3a8a",
+              background:
+                loading || listLoading || sortedDirectory.length === 0
+                  ? "#8ea0d1"
+                  : "#1e3a8a",
               color: "white",
               border: "none",
               borderRadius: 6,
+              cursor:
+                loading || listLoading || sortedDirectory.length === 0
+                  ? "not-allowed"
+                  : "pointer",
             }}
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "Logging in..." : listLoading ? "Loading..." : "Login"}
           </button>
 
           <button
-            onClick={loadDirectory}
+            onClick={() => loadDirectory(true)}
+            disabled={loading}
             style={{
               width: "100%",
               padding: 8,
               marginTop: 10,
               border: "1px solid #ddd",
               background: "white",
+              borderRadius: 6,
+              cursor: loading ? "not-allowed" : "pointer",
             }}
           >
             Refresh staff list
@@ -230,3 +369,17 @@ export default function Home() {
     </>
   );
 }
+
+export const getServerSideProps: GetServerSideProps = async ({ res }) => {
+  res.setHeader(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+  );
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Surrogate-Control", "no-store");
+
+  return {
+    props: {},
+  };
+};
