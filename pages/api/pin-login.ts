@@ -14,6 +14,10 @@ function hashPin(pin: string, salt: string) {
   return crypto.createHash("sha256").update(`${salt}:${pin}`).digest("hex");
 }
 
+function generateLoginToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.setHeader("Pragma", "no-cache");
@@ -62,11 +66,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "User email not found" });
     }
 
+    // 关键：生成新的单设备 token，并写进 profiles
+    const loginToken = generateLoginToken();
+
+    const updateToken = await admin
+      .from("profiles")
+      .update({ single_login_token: loginToken })
+      .eq("id", staff_id);
+
+    if (updateToken.error) {
+      return res.status(400).json({ error: updateToken.error.message });
+    }
+
+    const redirectTo = `${SITE_URL}/auth/callback?single_login_token=${encodeURIComponent(
+      loginToken
+    )}`;
+
     const link = await admin.auth.admin.generateLink({
       type: "magiclink",
       email,
       options: {
-        redirectTo: `${SITE_URL}/auth/callback`,
+        redirectTo,
       },
     });
 

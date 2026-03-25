@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
+import { useRouter } from "next/router";
 import { supabase } from "../../lib/supabaseClient";
+
+const SINGLE_LOGIN_STORAGE_KEY = "wak_single_login_token";
 
 export default function AuthCallback() {
   const [msg, setMsg] = useState("Signing you in...");
+  const router = useRouter();
 
   useEffect(() => {
     async function waitForSession() {
       try {
         let session = null;
 
-        // 最多等 3 秒（10 次，每次 300ms）
         for (let i = 0; i < 10; i++) {
           const { data } = await supabase.auth.getSession();
           session = data.session;
@@ -27,7 +30,14 @@ export default function AuthCallback() {
           return;
         }
 
-        // ✅ 成功 → 进入系统
+        const tokenFromUrl = new URL(window.location.href).searchParams.get("single_login_token");
+
+        if (tokenFromUrl) {
+          localStorage.setItem(SINGLE_LOGIN_STORAGE_KEY, tokenFromUrl);
+        } else {
+          localStorage.removeItem(SINGLE_LOGIN_STORAGE_KEY);
+        }
+
         window.location.href = "/staff/home";
       } catch (err) {
         console.error("Callback error:", err);
@@ -39,8 +49,10 @@ export default function AuthCallback() {
       }
     }
 
-    waitForSession();
-  }, []);
+    if (router.isReady) {
+      waitForSession();
+    }
+  }, [router.isReady]);
 
   return (
     <div

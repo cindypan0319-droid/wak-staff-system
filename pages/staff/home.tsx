@@ -18,6 +18,7 @@ const CARD_BG = "#FFFFFF";
 const BORDER = "#E5E7EB";
 const TEXT = "#111827";
 const MUTED = "#6B7280";
+const SINGLE_LOGIN_STORAGE_KEY = "wak_single_login_token";
 
 function displayName(profile: ProfileRow | null, email: string | null) {
   const preferred = (profile?.preferred_name ?? "").trim();
@@ -228,7 +229,9 @@ export default function StaffHomePage() {
   async function logout() {
     setLoading(true);
     setMsg("");
+
     try {
+      localStorage.removeItem(SINGLE_LOGIN_STORAGE_KEY);
       await supabase.auth.signOut();
       window.location.href = "/";
     } finally {
@@ -418,8 +421,11 @@ export default function StaffHomePage() {
             )}
 
             <CardButton title="My Roster" desc="Check my shifts" href="/staff/my-roster" />
-            <CardButton title="My Clock History" desc="Check my own records" href="/staff/clock-history" />
-            
+            <CardButton
+              title="My Clock History"
+              desc="Check my own records"
+              href="/staff/clock-history"
+            />
           </div>
         </SectionBlock>
 
@@ -479,7 +485,7 @@ export default function StaffHomePage() {
                 desc="Sheet-style daily entry table"
                 href="/owner/daily-log"
               />
-              
+
               <CardButton
                 title="Dashboard"
                 desc="Business overview"
