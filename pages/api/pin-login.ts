@@ -29,6 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { staff_id, pin } = req.body ?? {};
+    console.log("pin-login start:", { staff_id });
 
     if (!staff_id || pin === undefined || pin === null) {
       return res.status(400).json({ error: "Missing staff_id or pin" });
@@ -38,9 +39,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const p = await admin
       .from("profiles")
-      .select("is_active, pin_hash, pin_salt")
+      .select("id, is_active, pin_hash, pin_salt")
       .eq("id", staff_id)
-      .maybeSingle();
+      .single();
+
+    console.log("profile result:", p);
 
     if (p.error) return res.status(400).json({ error: p.error.message });
     if (!p.data) return res.status(404).json({ error: "Profile not found" });
@@ -60,27 +63,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const u = await admin.auth.admin.getUserById(staff_id);
-    const email = u.data?.user?.email;
+    console.log("auth user result:", u);
 
+    const email = u.data?.user?.email;
     if (!email) {
       return res.status(400).json({ error: "User email not found" });
     }
 
-    // 关键：生成新的单设备 token，并写进 profiles
     const loginToken = generateLoginToken();
+    console.log("generated token:", loginToken);
 
     const updateToken = await admin
       .from("profiles")
       .update({ single_login_token: loginToken })
-      .eq("id", staff_id);
+      .eq("id", staff_id)
+      .select("id, single_login_token")
+      .single();
+
+    console.log("updateToken result:", updateToken);
 
     if (updateToken.error) {
-      return res.status(400).json({ error: updateToken.error.message });
+      return res.status(400).json({ error: "Update token failed: " + updateToken.error.message });
+    }
+
+    if (!updateToken.data) {
+      return res.status(400).json({ error: "Update token failed: no row returned" });
     }
 
     const redirectTo = `${SITE_URL}/auth/callback?single_login_token=${encodeURIComponent(
       loginToken
     )}`;
+
+    console.log("redirectTo:", redirectTo);
 
     const link = await admin.auth.admin.generateLink({
       type: "magiclink",
@@ -90,6 +104,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
 
+    console.log("generateLink result:", link);
+
     if (link.error) return res.status(400).json({ error: link.error.message });
 
     const action_link = link.data.properties?.action_link;
@@ -97,8 +113,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "No action_link returned" });
     }
 
-    return res.status(200).json({ ok: true, action_link });
+    return res.status(200).json({
+      ok: true,
+      action_link,
+      debug_token_saved: updateToken.data.single_login_token,
+    });
   } catch (e: any) {
+    console.error("pin-login fatal error:", e);
     return res.status(500).json({ error: e.message ?? "Server error" });
   }
 }
