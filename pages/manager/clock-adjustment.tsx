@@ -3,6 +3,14 @@ import { supabase } from "../../lib/supabaseClient";
 
 type Range = { startISO: string; endISO: string };
 
+type ShiftStatus =
+  | "SCHEDULED"
+  | "WORKED"
+  | "ABSENT"
+  | "SICK"
+  | "CANCELLED"
+  | "COVERED";
+
 type Shift = {
   id: number;
   staff_id: string;
@@ -10,6 +18,11 @@ type Shift = {
   shift_end: string;
   break_minutes?: number | null;
   hourly_rate?: number | null;
+
+  shift_status?: ShiftStatus | null;
+  shift_status_note?: string | null;
+  shift_status_updated_by?: string | null;
+  shift_status_updated_at?: string | null;
 };
 
 type TimeClock = {
@@ -155,14 +168,14 @@ function actionButton(
       onClick={onClick}
       disabled={disabled}
       style={{
-        padding: "12px 16px",
-        minHeight: 46,
-        borderRadius: 12,
+        padding: "8px 12px",
+        minHeight: 36,
+        borderRadius: 10,
         border: `1px solid ${borderColor}`,
         background: bg,
         color: textColor,
-        fontWeight: 800,
-        fontSize: 15,
+        fontWeight: 700,
+        fontSize: 13,
         cursor: disabled ? "not-allowed" : "pointer",
         boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
         whiteSpace: "nowrap",
@@ -177,15 +190,15 @@ function infoCard(label: string, value: string, color?: string) {
   return (
     <div
       style={{
-        padding: "10px 12px",
-        borderRadius: 12,
+        padding: "8px 10px",
+        borderRadius: 10,
         background: "#F9FAFB",
         border: `1px solid ${BORDER}`,
-        minWidth: 160,
+        minWidth: 130,
       }}
     >
       <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
-      <div style={{ fontWeight: 800, fontSize: 18, color: color || TEXT }}>{value}</div>
+      <div style={{ fontWeight: 800, fontSize: 16, color: color || TEXT }}>{value}</div>
     </div>
   );
 }
@@ -205,10 +218,10 @@ function badge(label: string, options?: { kind?: "blue" | "green" | "yellow" | "
     <span
       style={{
         display: "inline-block",
-        padding: "6px 10px",
+        padding: "4px 8px",
         borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 800,
+        fontSize: 11,
+        fontWeight: 700,
         background: styles[kind].bg,
         color: styles[kind].color,
       }}
@@ -223,29 +236,65 @@ function inputStyle(width?: number | string) {
     width: width ?? "100%",
     maxWidth: "100%",
     boxSizing: "border-box" as const,
-    padding: "10px 12px",
-    borderRadius: 10,
+    padding: "7px 10px",
+    borderRadius: 8,
     border: "1px solid #D1D5DB",
-    fontSize: 14,
+    fontSize: 13,
     background: "#fff",
     color: TEXT,
   };
 }
 
-function getRowBackground(alerts: { label: string; kind: "red" | "yellow" | "blue" | "gray" }[]) {
+function normalizeShiftStatus(v: any): ShiftStatus {
+  const s = String(v ?? "SCHEDULED").toUpperCase();
+  if (
+    s === "WORKED" ||
+    s === "ABSENT" ||
+    s === "SICK" ||
+    s === "CANCELLED" ||
+    s === "COVERED"
+  ) {
+    return s as ShiftStatus;
+  }
+  return "SCHEDULED";
+}
+
+function isNoPayStatus(status: ShiftStatus | null | undefined) {
+  return (
+    status === "ABSENT" ||
+    status === "SICK" ||
+    status === "CANCELLED" ||
+    status === "COVERED"
+  );
+}
+
+function statusBadge(status: ShiftStatus | null | undefined) {
+  const s = normalizeShiftStatus(status);
+
+  if (s === "WORKED") return badge("WORKED", { kind: "green" });
+  if (s === "ABSENT") return badge("ABSENT", { kind: "red" });
+  if (s === "SICK") return badge("SICK", { kind: "blue" });
+  if (s === "CANCELLED") return badge("CANCELLED", { kind: "gray" });
+  if (s === "COVERED") return badge("COVERED", { kind: "yellow" });
+  return badge("SCHEDULED", { kind: "gray" });
+}
+
+function getRowBackground(
+  alerts: { label: string; kind: "red" | "yellow" | "blue" | "gray" }[],
+  shiftStatus?: ShiftStatus | null
+) {
+  const status = normalizeShiftStatus(shiftStatus);
+
+  if (status === "ABSENT") return "#FEF2F2";
+  if (status === "SICK") return "#EFF6FF";
+  if (status === "CANCELLED") return "#F9FAFB";
+  if (status === "COVERED") return "#FFFBEB";
+
   const labels = alerts.map((a) => a.label);
 
-  if (labels.includes("OPEN CLOCK")) {
-    return "#FEF2F2";
-  }
-
-  if (labels.includes("CROSSES MIDNIGHT") || labels.includes("LONG SHIFT")) {
-    return "#FFFBEA";
-  }
-
-  if (labels.includes("POSSIBLE COVER SHIFT")) {
-    return "#EFF6FF";
-  }
+  if (labels.includes("OPEN CLOCK")) return "#FEF2F2";
+  if (labels.includes("CROSSES MIDNIGHT") || labels.includes("LONG SHIFT")) return "#FFFBEA";
+  if (labels.includes("POSSIBLE COVER SHIFT")) return "#EFF6FF";
 
   return "#FFFFFF";
 }
@@ -292,7 +341,6 @@ export default function ClockAdjustmentPage() {
 
   useEffect(() => {
     loadPermission();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [fromDate, setFromDate] = useState<string>(todayDateInputValue());
@@ -373,7 +421,6 @@ export default function ClockAdjustmentPage() {
 
   useEffect(() => {
     if (!authLoading && isManagerOrOwner) fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, viewerRole]);
 
   function findClockForShift(shift: Shift) {
@@ -494,6 +541,68 @@ export default function ClockAdjustmentPage() {
     }
   }
 
+  async function updateShiftStatus(
+    shiftId: number,
+    status: ShiftStatus,
+    note?: string | null
+  ) {
+    setLoading(true);
+    setMsg("");
+
+    try {
+      const payload: any = {
+        shift_status: status,
+        shift_status_note: note?.trim() ? note.trim() : null,
+        shift_status_updated_by: viewerId,
+        shift_status_updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase.from("shifts").update(payload).eq("id", shiftId);
+
+      if (error) {
+        setMsg("Update shift status failed: " + error.message);
+        return;
+      }
+
+      setMsg(`Shift marked as ${status}.`);
+      await fetchData();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function restoreShiftToNormal(shiftId: number) {
+    await updateShiftStatus(shiftId, "SCHEDULED", null);
+  }
+
+  async function deleteShift(shiftId: number) {
+    if (!confirm("Delete this shift completely? This cannot be undone.")) return;
+
+    setLoading(true);
+    setMsg("");
+
+    try {
+      const linkedClock = clocks.find((c) => c.shift_id === shiftId);
+
+      if (linkedClock) {
+        setMsg("Cannot delete this shift because it already has a linked clock record. Use status instead.");
+        return;
+      }
+
+      const { error } = await supabase.from("shifts").delete().eq("id", shiftId);
+
+      if (error) {
+        setMsg("Delete shift failed: " + error.message);
+        return;
+      }
+
+      setMsg("Shift deleted.");
+      await fetchData();
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function setToRoster(clockId: number, shift: Shift) {
     const inVal = new Date(shift.shift_start);
     const outVal = new Date(shift.shift_end);
@@ -510,6 +619,21 @@ export default function ClockAdjustmentPage() {
   }
 
   function getPayrollMinutes(shift: Shift, clock: TimeClock | null) {
+    const status = normalizeShiftStatus(shift.shift_status);
+
+    if (isNoPayStatus(status)) {
+      return {
+        breakMin: shift.break_minutes ?? 0,
+        rosterWorkMin: 0,
+        rawWorkMin: 0,
+        adjWorkMin: 0,
+        payrollWorkMin: 0,
+        source: status,
+        rawMin: null,
+        adjMin: null,
+      };
+    }
+
     const breakMin = shift.break_minutes ?? 0;
 
     const rosterMin = minutesBetween(shift.shift_start, shift.shift_end);
@@ -594,11 +718,12 @@ export default function ClockAdjustmentPage() {
 
       const dayType = getDayTypeByISO(shift.shift_start);
       const rate = shift.hourly_rate ?? null;
+      const status = normalizeShiftStatus(shift.shift_status);
 
       const payrollHours = payroll.payrollWorkMin !== null ? round2(payroll.payrollWorkMin / 60) : null;
       const pay = payrollHours !== null && rate !== null ? round2(payrollHours * Number(rate)) : null;
 
-      return { shift, clock, coverClock, payroll, dayType, rate, payrollHours, pay, alerts };
+      return { shift, clock, coverClock, payroll, dayType, rate, status, payrollHours, pay, alerts };
     });
   }, [filteredShifts, clocks]);
 
@@ -815,7 +940,7 @@ export default function ClockAdjustmentPage() {
           <div style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Summary</h2>
             <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Payroll time rule: <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
+              Payroll time rule: <b>Status</b> → <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
             </div>
           </div>
 
@@ -856,20 +981,20 @@ export default function ClockAdjustmentPage() {
                 width: "100%",
                 borderCollapse: "separate",
                 borderSpacing: 0,
-                minWidth: 1320,
+                minWidth: 10,
               }}
             >
               <thead>
                 <tr>
-                  {["Staff", "Shift", "Raw Clock", "Adjustment", "Payroll", "Alert", "Actions"].map((head) => (
+                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Payroll", "Alert", "Actions"].map((head) => (
                     <th
                       key={head}
                       style={{
                         textAlign: "left",
-                        padding: "14px 12px",
+                        padding: "10px 8px",
                         borderBottom: `1px solid ${BORDER}`,
                         color: MUTED,
-                        fontSize: 13,
+                        fontSize: 12,
                         background: "#FAFAFA",
                         whiteSpace: "nowrap",
                         position: "sticky",
@@ -911,28 +1036,43 @@ export default function ClockAdjustmentPage() {
                       ? badge("RAW", { kind: "blue" })
                       : r.payroll.source === "ROSTER"
                       ? badge("ROSTER", { kind: "yellow" })
+                      : r.payroll.source === "ABSENT"
+                      ? badge("ABSENT", { kind: "red" })
+                      : r.payroll.source === "SICK"
+                      ? badge("SICK", { kind: "blue" })
+                      : r.payroll.source === "CANCELLED"
+                      ? badge("CANCELLED", { kind: "gray" })
+                      : r.payroll.source === "COVERED"
+                      ? badge("COVERED", { kind: "yellow" })
                       : badge("NONE", { kind: "gray" });
 
                   return (
                     <tr
                       key={shift.id}
                       style={{
-                        background: getRowBackground(r.alerts),
-                        boxShadow: r.alerts.some((a) => a.label === "OPEN CLOCK")
-                          ? "inset 4px 0 0 #DC2626"
-                          : r.alerts.some((a) => a.label === "CROSSES MIDNIGHT" || a.label === "LONG SHIFT")
-                          ? "inset 4px 0 0 #D97706"
-                          : r.alerts.some((a) => a.label === "POSSIBLE COVER SHIFT")
-                          ? "inset 4px 0 0 #2563EB"
-                          : "none",
+                        background: getRowBackground(r.alerts, r.status),
+                        boxShadow:
+                          r.status === "ABSENT"
+                            ? "inset 4px 0 0 #DC2626"
+                            : r.status === "SICK"
+                            ? "inset 4px 0 0 #2563EB"
+                            : r.status === "COVERED"
+                            ? "inset 4px 0 0 #D97706"
+                            : r.alerts.some((a) => a.label === "OPEN CLOCK")
+                            ? "inset 4px 0 0 #DC2626"
+                            : r.alerts.some((a) => a.label === "CROSSES MIDNIGHT" || a.label === "LONG SHIFT")
+                            ? "inset 4px 0 0 #D97706"
+                            : r.alerts.some((a) => a.label === "POSSIBLE COVER SHIFT")
+                            ? "inset 4px 0 0 #2563EB"
+                            : "none",
                       }}
                     >
                       <td
                         style={{
-                          padding: "14px 12px",
+                          padding: "10px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 120,
+                          minWidth: 90,
                         }}
                       >
                         <div style={{ fontWeight: 800, color: TEXT }}>{staffLabel(shift.staff_id)}</div>
@@ -940,10 +1080,10 @@ export default function ClockAdjustmentPage() {
 
                       <td
                         style={{
-                          padding: "14px 12px",
+                          padding: "10px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 220,
+                          minWidth: 100,
                         }}
                       >
                         <div style={{ marginBottom: 8 }}>{dayBadge}</div>
@@ -953,10 +1093,27 @@ export default function ClockAdjustmentPage() {
 
                       <td
                         style={{
-                          padding: "14px 12px",
+                          padding: "10px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 210,
+                          minWidth: 60,
+                        }}
+                      >
+                        <div style={{ marginBottom: 8 }}>{statusBadge(r.status)}</div>
+
+                        {shift.shift_status_note ? (
+                          <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4 }}>
+                            Note: {shift.shift_status_note}
+                          </div>
+                        ) : null}
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "10px 8px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          verticalAlign: "top",
+                          minWidth: 100,
                         }}
                       >
                         <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>In</div>
@@ -970,10 +1127,10 @@ export default function ClockAdjustmentPage() {
 
                       <td
                         style={{
-                          padding: "14px 12px",
+                          padding: "10px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 250,
+                          minWidth: 160,
                         }}
                       >
                         {!hasClock ? (
@@ -1015,10 +1172,10 @@ export default function ClockAdjustmentPage() {
 
                       <td
                         style={{
-                          padding: "14px 12px",
+                          padding: "10px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 220,
+                          minWidth: 90,
                         }}
                       >
                         <div style={{ marginBottom: 10 }}>{sourceBadge}</div>
@@ -1039,10 +1196,10 @@ export default function ClockAdjustmentPage() {
 
                       <td
                         style={{
-                          padding: "14px 12px",
+                          padding: "10px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 170,
+                          minWidth: 90,
                         }}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1066,27 +1223,40 @@ export default function ClockAdjustmentPage() {
 
                       <td
                         style={{
-                          padding: "14px 12px",
+                          padding: "10px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
                           minWidth: 150,
                         }}
                       >
-                        {!hasClock ? (
-                          actionButton("Create clock", () => createClockForShift(shift), {
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {!hasClock ? (
+                            actionButton("Create clock", () => createClockForShift(shift), {
+                              disabled: loading,
+                            })
+                          ) : (
+                            <>
+                              {actionButton("Set to roster", () => setToRoster(clockId, shift), {
+                                disabled: loading,
+                              })}
+                              {actionButton("Save", () => saveAdjustment(clockId), {
+                                primary: true,
+                                disabled: loading,
+                              })}
+                            </>
+                          )}
+
+                          {actionButton("Absent", () => updateShiftStatus(shift.id, "ABSENT"), {
+                            danger: true,
                             disabled: loading,
-                          })
-                        ) : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                            {actionButton("Set to roster", () => setToRoster(clockId, shift), {
-                              disabled: loading,
-                            })}
-                            {actionButton("Save", () => saveAdjustment(clockId), {
-                              primary: true,
-                              disabled: loading,
-                            })}
-                          </div>
-                        )}
+                          })}
+                          {actionButton("Sick", () => updateShiftStatus(shift.id, "SICK"), {
+                            disabled: loading,
+                          })}
+                          {actionButton("Restore", () => restoreShiftToNormal(shift.id), {
+                            disabled: loading,
+                          })}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1095,7 +1265,7 @@ export default function ClockAdjustmentPage() {
                 {rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={8}
                       style={{
                         padding: 16,
                         color: "#9CA3AF",

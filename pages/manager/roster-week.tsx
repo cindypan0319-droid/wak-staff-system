@@ -250,6 +250,23 @@ function inputStyle(width?: number | string) {
   };
 }
 
+function statCard(label: string, value: string, color?: string, extra?: React.ReactNode) {
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        borderRadius: 12,
+        background: "#F9FAFB",
+        border: `1px solid ${BORDER}`,
+        minWidth: 160,
+      }}
+    >
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>{label}</div>
+      {extra ? extra : <div style={{ fontWeight: 800, fontSize: 18, color: color || TEXT }}>{value}</div>}
+    </div>
+  );
+}
+
 export default function RosterWeek() {
   const [storeId] = useState("MOOROOLBARK");
   const [weekStart, setWeekStart] = useState(() => getThisWeekThuISO());
@@ -280,6 +297,7 @@ export default function RosterWeek() {
   const [isPublished, setIsPublished] = useState<boolean>(false);
   const [pubLoading, setPubLoading] = useState<boolean>(false);
   const [copyLoading, setCopyLoading] = useState<boolean>(false);
+  const [ratesLoading, setRatesLoading] = useState<boolean>(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"shift" | "unavail">("shift");
@@ -502,6 +520,92 @@ export default function RosterWeek() {
     if (ins.error) throw ins.error;
 
     return { ok: true, count: insertRows.length };
+  }
+
+  async function applyLatestRatesForWeek() {
+    try {
+      setRatesLoading(true);
+      setMsg("");
+
+      const sourceShifts = await getRawShiftsForWeek(weekStart);
+
+      if (sourceShifts.length === 0) {
+        setMsg("ℹ️ This week has no shifts.");
+        return;
+      }
+
+      const uniqueStaffIds = Array.from(new Set(sourceShifts.map((s) => s.staff_id)));
+
+      const rateRes = await supabase
+        .from("staff_pay_rates")
+        .select("staff_id, weekday_rate, saturday_rate, sunday_rate")
+        .in("staff_id", uniqueStaffIds);
+
+      if (rateRes.error) {
+        setMsg("❌ Failed to load latest rates: " + rateRes.error.message);
+        return;
+      }
+
+      const rateByStaff: Record<
+        string,
+        { weekday_rate: number; saturday_rate: number; sunday_rate: number }
+      > = {};
+
+      for (const r of rateRes.data ?? []) {
+        rateByStaff[(r as any).staff_id] = {
+          weekday_rate: Number((r as any).weekday_rate ?? 0),
+          saturday_rate: Number((r as any).saturday_rate ?? 0),
+          sunday_rate: Number((r as any).sunday_rate ?? 0),
+        };
+      }
+
+      const updates: { id: number; hourly_rate: number }[] = [];
+
+      for (const s of sourceShifts as any[]) {
+        const rateRow = rateByStaff[s.staff_id];
+        if (!rateRow) continue;
+
+        const day = new Date(s.shift_start).getDay();
+
+        let nextRate = rateRow.weekday_rate;
+        if (day === 6) nextRate = rateRow.saturday_rate;
+        if (day === 0) nextRate = rateRow.sunday_rate;
+
+        const currentRate = Number(s.hourly_rate ?? 0);
+        const latestRate = Number(nextRate ?? 0);
+
+        if (currentRate !== latestRate) {
+          updates.push({
+            id: s.id,
+            hourly_rate: latestRate,
+          });
+        }
+      }
+
+      if (updates.length === 0) {
+        setMsg("ℹ️ All shifts in this week already use the latest rates.");
+        return;
+      }
+
+      for (const u of updates) {
+        const up = await supabase
+          .from("shifts")
+          .update({ hourly_rate: u.hourly_rate })
+          .eq("id", u.id);
+
+        if (up.error) {
+          setMsg("❌ Failed to update some shifts: " + up.error.message);
+          return;
+        }
+      }
+
+      setMsg(`✅ Applied latest rates to ${updates.length} shift(s).`);
+      await loadShiftCosts();
+    } catch (e: any) {
+      setMsg("❌ Failed to apply latest rates: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setRatesLoading(false);
+    }
   }
 
   async function handleNextWeek() {
@@ -1308,8 +1412,6 @@ export default function RosterWeek() {
       </div>
 
       <div style={{ maxWidth: 1360, margin: "0 auto" }}>
-        <div style={{ marginBottom: 12 }}>{actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}</div>
-
         <div
           style={{
             border: `1px solid ${BORDER}`,
@@ -1320,9 +1422,23 @@ export default function RosterWeek() {
             boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
           }}
         >
-          <h1 style={{ margin: 0, color: TEXT }}>Roster (Week)</h1>
-          <div style={{ marginTop: 6, color: MUTED }}>
-            Weekly roster planning and availability management
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <h1 style={{ margin: 0, color: TEXT }}>Roster (Week)</h1>
+              <div style={{ marginTop: 6, color: MUTED }}>
+                Weekly roster planning and availability management
+              </div>
+            </div>
+
+            <div>{actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}</div>
           </div>
         </div>
 
@@ -1340,10 +1456,10 @@ export default function RosterWeek() {
             style={{
               display: "flex",
               justifyContent: "space-between",
-              alignItems: "flex-end",
-              gap: 16,
+              alignItems: "flex-start",
+              gap: 18,
               flexWrap: "wrap",
-              marginBottom: 14,
+              marginBottom: 16,
             }}
           >
             <div>
@@ -1351,79 +1467,55 @@ export default function RosterWeek() {
               <div style={{ fontWeight: 800, fontSize: 18, color: TEXT }}>{weekRangeText(weekStart)}</div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {actionButton("← Prev Week", () => setWeekStart((w) => addDaysISO(w, -7)), {
-                disabled: copyLoading,
-              })}
-              {actionButton("This Week", () => setWeekStart(getThisWeekThuISO()), {
-                primary: true,
-                disabled: copyLoading,
-              })}
-              {actionButton("Next Week →", handleNextWeek, {
-                disabled: copyLoading,
-              })}
-              {actionButton("Copy from previous week", handleCopyFromPreviousWeek, {
-                disabled: copyLoading,
-              })}
-              {actionButton("Refresh", loadAll, { disabled: copyLoading })}
-              {!isPublished
-                ? actionButton("Publish this week", publishWeek, { primary: true, disabled: pubLoading || copyLoading })
-                : actionButton("Unpublish", unpublishWeek, { danger: true, disabled: pubLoading || copyLoading })}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-end" }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {actionButton("← Prev Week", () => setWeekStart((w) => addDaysISO(w, -7)), {
+                  disabled: copyLoading || ratesLoading,
+                })}
+                {actionButton("This Week", () => setWeekStart(getThisWeekThuISO()), {
+                  primary: true,
+                  disabled: copyLoading || ratesLoading,
+                })}
+                {actionButton("Next Week →", handleNextWeek, {
+                  disabled: copyLoading || ratesLoading,
+                })}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {actionButton("Copy from previous week", handleCopyFromPreviousWeek, {
+                  disabled: copyLoading || ratesLoading || pubLoading,
+                })}
+                {actionButton(
+                  "Apply Latest Rates",
+                  async () => {
+                    if (!confirm("Apply the latest pay rates to all shifts in this week?")) return;
+                    await applyLatestRatesForWeek();
+                  },
+                  {
+                    disabled: copyLoading || ratesLoading || pubLoading,
+                  }
+                )}
+                {actionButton("Refresh", loadAll, {
+                  disabled: copyLoading || ratesLoading || pubLoading,
+                })}
+                {!isPublished
+                  ? actionButton("Publish this week", publishWeek, {
+                      primary: true,
+                      disabled: pubLoading || copyLoading || ratesLoading,
+                    })
+                  : actionButton("Unpublish", unpublishWeek, {
+                      danger: true,
+                      disabled: pubLoading || copyLoading || ratesLoading,
+                    })}
+              </div>
             </div>
           </div>
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <div
-              style={{
-                padding: "10px 12px",
-                borderRadius: 12,
-                background: "#F9FAFB",
-                border: `1px solid ${BORDER}`,
-                minWidth: 160,
-              }}
-            >
-              <div style={{ fontSize: 12, color: MUTED }}>Week start</div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: TEXT }}>{weekStart}</div>
-            </div>
-
-            <div
-              style={{
-                padding: "10px 12px",
-                borderRadius: 12,
-                background: "#F9FAFB",
-                border: `1px solid ${BORDER}`,
-                minWidth: 160,
-              }}
-            >
-              <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Roster status</div>
-              {isPublished ? badge("PUBLISHED", "green") : badge("DRAFT", "yellow")}
-            </div>
-
-            <div
-              style={{
-                padding: "10px 12px",
-                borderRadius: 12,
-                background: "#F9FAFB",
-                border: `1px solid ${BORDER}`,
-                minWidth: 160,
-              }}
-            >
-              <div style={{ fontSize: 12, color: MUTED }}>Store total hours</div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_BLUE }}>{storeTotalHours.toFixed(2)}h</div>
-            </div>
-
-            <div
-              style={{
-                padding: "10px 12px",
-                borderRadius: 12,
-                background: "#F9FAFB",
-                border: `1px solid ${BORDER}`,
-                minWidth: 160,
-              }}
-            >
-              <div style={{ fontSize: 12, color: MUTED }}>Store total wage</div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: WAK_RED }}>${storeTotalWage.toFixed(2)}</div>
-            </div>
+            {statCard("Week start", weekStart)}
+            {statCard("Roster status", "", undefined, isPublished ? badge("PUBLISHED", "green") : badge("DRAFT", "yellow"))}
+            {statCard("Store total hours", `${storeTotalHours.toFixed(2)}h`, WAK_BLUE)}
+            {statCard("Store total wage", `$${storeTotalWage.toFixed(2)}`, WAK_RED)}
           </div>
         </div>
 
@@ -1775,6 +1867,7 @@ export default function RosterWeek() {
             <li>Click the unavailable block to manage weekly rules and skips.</li>
             <li>Next Week will auto-copy this week only when next week is empty.</li>
             <li>Copy from previous week will only work when this week is empty.</li>
+            <li>Apply Latest Rates updates this week’s existing shifts to the latest current pay rates.</li>
           </ul>
         </div>
       </div>
