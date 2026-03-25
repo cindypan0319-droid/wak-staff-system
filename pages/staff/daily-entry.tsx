@@ -4,6 +4,9 @@ import { supabase } from "../../lib/supabaseClient";
 const DEFAULT_STORE_ID = "MOOROOLBARK";
 const DEFAULT_FLOAT_IF_NO_MORNING = 400;
 const EPS = 0.01;
+const AUTO_SAVE_DELAY = 2500;
+
+
 
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
@@ -56,6 +59,8 @@ type CashDiffReason =
   | "COUNTING_MISTAKE"
   | "POS_CASH_ADJUSTMENT"
   | "OTHER";
+
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 function todayDateInputValue() {
   const d = new Date();
@@ -144,6 +149,7 @@ export default function DailyEntryPage() {
   const [detectedIp, setDetectedIp] = useState("");
 
   const [date, setDate] = useState(todayDateInputValue());
+  const draftKey = `daily-entry-draft-${date}`;
 
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [platformGrossText, setPlatformGrossText] = useState<Record<string, string>>({});
@@ -164,7 +170,17 @@ export default function DailyEntryPage() {
   const [morningDirty, setMorningDirty] = useState(false);
   const [closingDirty, setClosingDirty] = useState(false);
 
+  const [morningSaveState, setMorningSaveState] = useState<SaveState>("idle");
+  const [closingSaveState, setClosingSaveState] = useState<SaveState>("idle");
+  const [morningSaveError, setMorningSaveError] = useState("");
+  const [closingSaveError, setClosingSaveError] = useState("");
+  const [morningLastSavedAt, setMorningLastSavedAt] = useState<string | null>(null);
+  const [closingLastSavedAt, setClosingLastSavedAt] = useState<string | null>(null);
+
   const initialLoadDoneRef = useRef(false);
+  const morningSavingRef = useRef(false);
+  const closingSavingRef = useRef(false);
+  const lastAutoSaveKeyRef = useRef<string>("");
 
   const morningTotal = useMemo(() => calcTotal(morningCounts), [morningCounts]);
   const nightTotal = useMemo(() => calcTotal(nightCounts), [nightCounts]);
@@ -244,13 +260,24 @@ export default function DailyEntryPage() {
     const n = parseIntOrNull(raw);
     setter((prev) => ({ ...prev, [key]: n }));
     if (initialLoadDoneRef.current) {
-      if (section === "morning") setMorningDirty(true);
-      else setClosingDirty(true);
+      if (section === "morning") {
+        setMorningDirty(true);
+        setMorningSaveState("idle");
+        setMorningSaveError("");
+      } else {
+        setClosingDirty(true);
+        setClosingSaveState("idle");
+        setClosingSaveError("");
+      }
     }
   }
 
   function markClosingDirty() {
-    if (initialLoadDoneRef.current) setClosingDirty(true);
+    if (initialLoadDoneRef.current) {
+      setClosingDirty(true);
+      setClosingSaveState("idle");
+      setClosingSaveError("");
+    }
   }
 
   async function loadPlatforms() {
@@ -362,8 +389,36 @@ export default function DailyEntryPage() {
 
       setMorningDirty(false);
       setClosingDirty(false);
+      setMorningSaveState("idle");
+      setClosingSaveState("idle");
+      setMorningSaveError("");
+      setClosingSaveError("");
 
       setMsg("✅ Loaded saved data for this date.");
+
+      const savedDraft = localStorage.getItem(draftKey);
+
+      if (savedDraft) {
+        try {
+          const d = JSON.parse(savedDraft);
+
+          setCashSalesText(d.cashSalesText ?? "");
+          setEftposSalesText(d.eftposSalesText ?? "");
+          setNotes(d.notes ?? "");
+          setPlatformGrossText(d.platformGrossText ?? {});
+          setMorningCounts(d.morningCounts ?? { ...emptyCounts });
+          setNightCounts(d.nightCounts ?? { ...emptyCounts });
+          setRemovedCounts(d.removedCounts ?? { ...emptyCounts });
+          setCashDiffReason(d.cashDiffReason ?? "");
+          setCashDiffNote(d.cashDiffNote ?? "");
+          setHasMorningRecord(!!d.hasMorningRecord);
+
+          setMsg("ℹ️ Restored unsaved local draft.");
+        } catch (e) {
+          console.log("restore draft error:", e);
+        }
+      }
+
     } finally {
       setLoading(false);
       initialLoadDoneRef.current = true;
@@ -375,21 +430,34 @@ export default function DailyEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
-  async function saveMorning() {
-    setLoading(true);
-    setMsg("");
+  async function saveMorning(options?: { silent?: boolean }) {
+    if (morningSavingRef.current) return true;
+
+    morningSavingRef.current = true;
+    if (!options?.silent) {
+      setLoading(true);
+      setMsg("");
+    }
+    setMorningSaveState("saving");
+    setMorningSaveError("");
 
     try {
       if (!isStoreDevice) {
-        setMsg("❌ Daily entry can only be saved on the store device / store network.");
-        return;
+        const text = "❌ Daily entry can only be saved on the store device / store network.";
+        if (!options?.silent) setMsg(text);
+        setMorningSaveState("error");
+        setMorningSaveError(text);
+        return false;
       }
 
       const { data } = await supabase.auth.getUser();
       const uid = data.user?.id ?? null;
       if (!uid) {
-        setMsg("❌ Not logged in.");
-        return;
+        const text = "❌ Not logged in.";
+        if (!options?.silent) setMsg(text);
+        setMorningSaveState("error");
+        setMorningSaveError(text);
+        return false;
       }
 
       const payload: any = {
@@ -407,15 +475,27 @@ export default function DailyEntryPage() {
       } as any);
 
       if (res.error) {
-        setMsg("❌ Save morning cashup failed: " + res.error.message);
-        return;
+        const text = "❌ Save morning cashup failed: " + res.error.message;
+        if (!options?.silent) setMsg(text);
+        setMorningSaveState("error");
+        setMorningSaveError(text);
+        return false;
       }
 
       setMorningDirty(false);
-      setMsg("✅ Morning cashup saved!");
-      await loadExisting();
+      setHasMorningRecord(true);
+      setMorningSaveState("saved");
+      setMorningLastSavedAt(new Date().toISOString());
+      
+      if (!options?.silent) {
+        setMsg("✅ Morning cashup saved!");
+      }
+      return true;
     } finally {
-      setLoading(false);
+      morningSavingRef.current = false;
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }
 
@@ -428,31 +508,65 @@ export default function DailyEntryPage() {
     return Math.abs(actualCashVsShouldDiff) > EPS;
   }
 
-  async function saveClosingAndSales() {
-    setLoading(true);
-    setMsg("");
+  async function saveClosingAndSales(options?: { silent?: boolean }) {
+
+    const autoSaveKey = JSON.stringify({
+      date,
+      nightCounts,
+      removedCounts,
+      cashSalesText,
+      eftposSalesText,
+      notes,
+      cashDiffReason,
+      cashDiffNote,
+      platformGrossText,
+    });
+
+    if (options?.silent && autoSaveKey === lastAutoSaveKeyRef.current) {
+      return true;
+    }
+
+    if (closingSavingRef.current) return true;
+
+    closingSavingRef.current = true;
+    
+  
+    setClosingSaveState("saving");
+    setClosingSaveError("");
 
     try {
       if (!isStoreDevice) {
-        setMsg("❌ Daily entry can only be saved on the store device / store network.");
-        return;
+        const text = "❌ Daily entry can only be saved on the store device / store network.";
+        if (!options?.silent) setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
       }
 
       const { data } = await supabase.auth.getUser();
       const uid = data.user?.id ?? null;
       if (!uid) {
-        setMsg("❌ Not logged in.");
-        return;
+        const text = "❌ Not logged in.";
+        if (!options?.silent) setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
       }
 
       if (needReason()) {
         if (!cashDiffReason) {
-          setMsg("❌ Please select a reason (Actual cash sales ≠ Should remove).");
-          return;
+          const text = "❌ Please select a reason (Actual cash sales ≠ Should remove).";
+          if (!options?.silent) setMsg(text);
+          setClosingSaveState("error");
+          setClosingSaveError(text);
+          return false;
         }
         if (cashDiffReason === "OTHER" && !cashDiffNote.trim()) {
-          setMsg("❌ Please write a note for 'Other'.");
-          return;
+          const text = "❌ Please write a note for 'Other'.";
+          if (!options?.silent) setMsg(text);
+          setClosingSaveState("error");
+          setClosingSaveError(text);
+          return false;
         }
       }
 
@@ -476,8 +590,11 @@ export default function DailyEntryPage() {
       } as any);
 
       if (nres.error) {
-        setMsg("❌ Save closing cashup failed: " + nres.error.message);
-        return;
+        const text = "❌ Save closing cashup failed: " + nres.error.message;
+        if (!options?.silent) setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
       }
 
       const dailyPayload: any = {
@@ -495,8 +612,11 @@ export default function DailyEntryPage() {
       } as any);
 
       if (ds.error) {
-        setMsg("❌ Save instore failed: " + ds.error.message);
-        return;
+        const text = "❌ Save instore failed: " + ds.error.message;
+        if (!options?.silent) setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
       }
 
       for (const p of platforms) {
@@ -514,25 +634,202 @@ export default function DailyEntryPage() {
         } as any);
 
         if (res.error) {
-          setMsg(`❌ Save platform "${p.name}" failed: ${res.error.message}`);
-          return;
+          const text = `❌ Save platform "${p.name}" failed: ${res.error.message}`;
+          if (!options?.silent) setMsg(text);
+          setClosingSaveState("error");
+          setClosingSaveError(text);
+          return false;
         }
       }
 
       setClosingDirty(false);
-      setMsg("✅ Closing saved! (cashup + sales + platforms refreshed)");
-      await loadExisting();
+      setClosingSaveState("saved");
+      setClosingLastSavedAt(new Date().toISOString());
+      localStorage.removeItem(draftKey);
+      if (!options?.silent) {
+        setMsg("✅ Closing saved! (cashup + sales + platforms refreshed)");
+      }
+      if (options?.silent) {
+        lastAutoSaveKeyRef.current = autoSaveKey;
+      }
+      return true;
     } finally {
-      setLoading(false);
+      closingSavingRef.current = false;
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }
 
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+
+    const draft = {
+      cashSalesText,
+      eftposSalesText,
+      notes,
+      platformGrossText,
+      morningCounts,
+      nightCounts,
+      removedCounts,
+      cashDiffReason,
+      cashDiffNote,
+      hasMorningRecord,
+    };
+
+    localStorage.setItem(draftKey, JSON.stringify(draft));
+  }, [
+    draftKey,
+    cashSalesText,
+    eftposSalesText,
+    notes,
+    platformGrossText,
+    morningCounts,
+    nightCounts,
+    removedCounts,
+    cashDiffReason,
+    cashDiffNote,
+    hasMorningRecord,
+  ]);
+
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+    if (!morningDirty) return;
+    if (!isStoreDevice || storeAccessLoading) return;
+
+    const timer = setTimeout(() => {
+      saveMorning({ silent: true });
+    }, AUTO_SAVE_DELAY);
+
+    return () => clearTimeout(timer);
+  }, [morningDirty, morningCounts, date, isStoreDevice, storeAccessLoading]);
+
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+    if (!closingDirty) return;
+    if (!isStoreDevice || storeAccessLoading) return;
+    if (closingSavingRef.current) return;
+
+    if (needReason() && !cashDiffReason) {
+      setClosingSaveState("idle");
+      return;
+    }
+
+    if (cashDiffReason === "OTHER" && !cashDiffNote.trim()) {
+      setClosingSaveState("idle");
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      saveClosingAndSales({ silent: true });
+    }, AUTO_SAVE_DELAY);
+
+    return () => clearTimeout(timer);
+  }, [
+    closingDirty,
+    nightCounts,
+    removedCounts,
+    cashSalesText,
+    eftposSalesText,
+    notes,
+    cashDiffReason,
+    cashDiffNote,
+    platformGrossText,
+    date,
+    isStoreDevice,
+    storeAccessLoading,
+  ]);
+
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!(morningDirty || closingDirty || morningSavingRef.current || closingSavingRef.current)) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [morningDirty, closingDirty]);
+
   function handleBackHome() {
-    if (morningDirty || closingDirty) {
-      setMsg("❌ You have unsaved changes. Please save before going back home.");
+    if (morningDirty || closingDirty || morningSavingRef.current || closingSavingRef.current) {
+      setMsg("❌ You have unsaved changes. Please wait for auto-save or save manually before going back home.");
       return;
     }
     window.location.href = "/staff/home";
+  }
+
+  function saveBadge(state: SaveState, dirty: boolean, errorText: string, lastSavedAt: string | null) {
+    if (state === "saving") {
+      return (
+        <div
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            background: "#DBEAFE",
+            color: "#1D4ED8",
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          Saving...
+        </div>
+      );
+    }
+
+    if (dirty) {
+      return (
+        <div
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            background: "#FEF3C7",
+            color: "#92400E",
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          Unsaved changes
+        </div>
+      );
+    }
+
+    if (state === "error") {
+      return (
+        <div
+          title={errorText || "Save failed"}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            background: "#FEE2E2",
+            color: "#991B1B",
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          Save failed
+        </div>
+      );
+    }
+
+    if (state === "saved" || lastSavedAt) {
+      return (
+        <div
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            background: "#DCFCE7",
+            color: "#166534",
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          Saved
+        </div>
+      );
+    }
+
+    return undefined;
   }
 
   function sectionCard(title: string, children: React.ReactNode, rightBadge?: React.ReactNode) {
@@ -739,7 +1036,6 @@ export default function DailyEntryPage() {
 
             {actionButton("Refresh", loadExisting, { disabled: loading })}
             {actionButton("← Back to Home", handleBackHome, { disabled: loading })}
-
             {loading && <span style={{ color: MUTED, fontWeight: 600 }}>Loading...</span>}
           </div>
         </div>
@@ -754,6 +1050,13 @@ export default function DailyEntryPage() {
             color: TEXT,
           }}
         >
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            {isStoreDevice ? "Store device access confirmed" : "Read only outside store device/network"}
+          </div>
+          <div style={{ fontSize: 13, color: MUTED }}>
+            Auto-save is enabled. Changes are saved after about 2.5 seconds of no typing.
+            {detectedIp ? ` Current IP: ${detectedIp}` : ""}
+          </div>
         </div>
 
         {msg && (
@@ -791,26 +1094,13 @@ export default function DailyEntryPage() {
             {renderDenomGrid(morningCounts, setMorningCounts, "morning")}
 
             <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-              {actionButton("Save Morning Cashup", saveMorning, {
+              {actionButton("Save Morning Cashup", () => saveMorning(), {
                 primary: true,
                 disabled: loading || pageReadOnly || storeAccessLoading,
               })}
             </div>
           </>,
-          morningDirty ? (
-            <div
-              style={{
-                padding: "8px 12px",
-                borderRadius: 999,
-                background: "#FEF3C7",
-                color: "#92400E",
-                fontWeight: 700,
-                fontSize: 13,
-              }}
-            >
-              Unsaved changes
-            </div>
-          ) : undefined
+          saveBadge(morningSaveState, morningDirty, morningSaveError, morningLastSavedAt)
         )}
 
         {sectionCard(
@@ -829,20 +1119,7 @@ export default function DailyEntryPage() {
 
             {renderDenomGrid(nightCounts, setNightCounts, "closing")}
           </>,
-          closingDirty ? (
-            <div
-              style={{
-                padding: "8px 12px",
-                borderRadius: 999,
-                background: "#FEF3C7",
-                color: "#92400E",
-                fontWeight: 700,
-                fontSize: 13,
-              }}
-            >
-              Unsaved changes
-            </div>
-          ) : undefined
+          saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
         )}
 
         {sectionCard(
@@ -1090,12 +1367,13 @@ export default function DailyEntryPage() {
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              {actionButton("Save Closing (Cashup + Sales)", saveClosingAndSales, {
+              {actionButton("Save Closing (Cashup + Sales)", () => saveClosingAndSales(), {
                 primary: true,
                 disabled: loading || pageReadOnly || storeAccessLoading,
               })}
             </div>
-          </>
+          </>,
+          saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
         )}
       </div>
     </div>

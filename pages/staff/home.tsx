@@ -475,6 +475,12 @@ export default function StaffHomePage() {
               }}
             >
               <CardButton
+                title="Daily Entry Log"
+                desc="Sheet-style daily entry table"
+                href="/owner/daily-log"
+              />
+              
+              <CardButton
                 title="Dashboard"
                 desc="Business overview"
                 href="/owner/dashboard"
