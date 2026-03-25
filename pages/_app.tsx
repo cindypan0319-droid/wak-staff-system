@@ -2,6 +2,7 @@ import type { AppProps } from "next/app";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import Head from "next/head";
+import AutoLogout from "../components/AutoLogout";
 
 export default function App({ Component, pageProps }: AppProps) {
   const [checking, setChecking] = useState(true);
@@ -20,7 +21,12 @@ export default function App({ Component, pageProps }: AppProps) {
           return;
         }
 
-        const p = await supabase.from("profiles").select("is_active").eq("id", uid).maybeSingle();
+        const p = await supabase
+          .from("profiles")
+          .select("is_active")
+          .eq("id", uid)
+          .maybeSingle();
+
         const isActive = (p.data as any)?.is_active;
 
         // If user has no profile row yet, allow (during dev)
@@ -63,7 +69,10 @@ export default function App({ Component, pageProps }: AppProps) {
         <Head>
           <title>WAK Staff</title>
           <meta name="theme-color" content="#1E5A9E" />
-          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+          <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1, viewport-fit=cover"
+          />
           <meta name="apple-mobile-web-app-capable" content="yes" />
           <meta name="mobile-web-app-capable" content="yes" />
           <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -83,7 +92,10 @@ export default function App({ Component, pageProps }: AppProps) {
       <Head>
         <title>WAK Staff</title>
         <meta name="theme-color" content="#1E5A9E" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -93,6 +105,7 @@ export default function App({ Component, pageProps }: AppProps) {
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </Head>
 
+      <AutoLogout />
       <Component {...pageProps} />
     </>
   );
