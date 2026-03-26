@@ -16,9 +16,17 @@ type DetailRow = {
   email: string | null;
   address: string | null;
   tfn: string | null;
-  super: string | null;
+
+  bank_bsb: string | null;
+  bank_account_number: string | null;
+
+  super_fund: string | null;
+  super_membership_number: string | null;
+
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
+  emergency_contact_address: string | null;
+
   birth_date: string | null;
   manager_note: string | null;
 };
@@ -491,69 +499,202 @@ export default function EmployeeDetailsPage() {
 
             <SectionCard
               title="Contact & Employment Details"
-              desc="Phone, contact, address and employee record information"
+              desc="Phone, address, bank details, tax, super and emergency contact information"
             >
               <div
                 style={{
                   display: "grid",
-                  gap: 14,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                  gap: 18,
                 }}
               >
-                <Field
-                  label="Phone"
-                  value={details.phone ?? ""}
-                  onChange={(v) => setDetailField({ phone: v })}
-                  placeholder="Enter phone number"
-                />
+                {/* Contact */}
+                <div
+                  style={{
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: 14,
+                    background: "#F9FAFB",
+                    padding: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 700, color: TEXT, marginBottom: 12 }}>
+                    Contact Details
+                  </div>
 
-                <Field
-                  label="Email"
-                  value={details.email ?? ""}
-                  onChange={(v) => setDetailField({ email: v })}
-                  placeholder="Enter email"
-                />
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 14,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                    }}
+                  >
+                    <Field
+                      label="Phone"
+                      value={details.phone ?? ""}
+                      onChange={(v) => setDetailField({ phone: v })}
+                      placeholder="Enter phone number"
+                    />
 
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <Field
-                    label="Address"
-                    value={details.address ?? ""}
-                    onChange={(v) => setDetailField({ address: v })}
-                    placeholder="Enter home address"
-                  />
+                    <Field
+                      label="Email"
+                      value={details.email ?? ""}
+                      onChange={(v) => setDetailField({ email: v })}
+                      placeholder="Enter email"
+                    />
+
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <Field
+                        label="Address"
+                        value={details.address ?? ""}
+                        onChange={(v) => setDetailField({ address: v })}
+                        placeholder="Enter home address"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <Field
-                  label="TFN"
-                  value={details.tfn ?? ""}
-                  onChange={(v) => setDetailField({ tfn: v })}
-                  placeholder="Enter TFN"
-                />
+                {/* Bank */}
+                <div
+                  style={{
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: 14,
+                    background: "#F9FAFB",
+                    padding: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 700, color: TEXT, marginBottom: 12 }}>
+                    Bank Details
+                  </div>
 
-                <Field
-                  label="Super"
-                  value={details.super ?? ""}
-                  onChange={(v) => setDetailField({ super: v })}
-                  placeholder="Fund / member number / note"
-                />
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 14,
+                      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    }}
+                  >
+                    <Field
+                      label="BSB"
+                      value={details.bank_bsb ?? ""}
+                      onChange={(v) =>
+                        setDetailField({
+                          bank_bsb: v.replace(/[^\d-]/g, "").slice(0, 7),
+                        })
+                      }
+                      placeholder="123-456"
+                    />
 
-                <Field
-                  label="Emergency contact name"
-                  value={details.emergency_contact_name ?? ""}
-                  onChange={(v) =>
-                    setDetailField({ emergency_contact_name: v })
-                  }
-                  placeholder="Enter contact name"
-                />
+                    <Field
+                      label="Account Number"
+                      value={details.bank_account_number ?? ""}
+                      onChange={(v) =>
+                        setDetailField({
+                          bank_account_number: v.replace(/\D/g, "").slice(0, 20),
+                        })
+                      }
+                      placeholder="Enter account number"
+                    />
+                  </div>
+                </div>
 
-                <Field
-                  label="Emergency contact phone"
-                  value={details.emergency_contact_phone ?? ""}
-                  onChange={(v) =>
-                    setDetailField({ emergency_contact_phone: v })
-                  }
-                  placeholder="Enter contact phone"
-                />
+                {/* Tax & Super */}
+                <div
+                  style={{
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: 14,
+                    background: "#F9FAFB",
+                    padding: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 700, color: TEXT, marginBottom: 12 }}>
+                    Tax & Super
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 14,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                    }}
+                  >
+                    <Field
+                      label="TFN"
+                      value={details.tfn ?? ""}
+                      onChange={(v) =>
+                        setDetailField({
+                          tfn: v.replace(/\D/g, "").slice(0, 9),
+                        })
+                      }
+                      placeholder="Enter TFN"
+                    />
+
+                    <Field
+                      label="Super Fund"
+                      value={details.super_fund ?? ""}
+                      onChange={(v) => setDetailField({ super_fund: v })}
+                      placeholder="Enter super fund name"
+                    />
+
+                    <Field
+                      label="Super Membership Number"
+                      value={details.super_membership_number ?? ""}
+                      onChange={(v) =>
+                        setDetailField({ super_membership_number: v })
+                      }
+                      placeholder="Enter membership number"
+                    />
+                  </div>
+                </div>
+
+                {/* Emergency Contact */}
+                <div
+                  style={{
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: 14,
+                    background: "#F9FAFB",
+                    padding: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 700, color: TEXT, marginBottom: 12 }}>
+                    Emergency Contact
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 14,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                    }}
+                  >
+                    <Field
+                      label="Emergency Contact Name"
+                      value={details.emergency_contact_name ?? ""}
+                      onChange={(v) =>
+                        setDetailField({ emergency_contact_name: v })
+                      }
+                      placeholder="Enter contact name"
+                    />
+
+                    <Field
+                      label="Emergency Contact Phone"
+                      value={details.emergency_contact_phone ?? ""}
+                      onChange={(v) =>
+                        setDetailField({ emergency_contact_phone: v })
+                      }
+                      placeholder="Enter contact phone"
+                    />
+
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <Field
+                        label="Emergency Contact Address"
+                        value={details.emergency_contact_address ?? ""}
+                        onChange={(v) =>
+                          setDetailField({ emergency_contact_address: v })
+                        }
+                        placeholder="Enter contact address"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             </SectionCard>
 
