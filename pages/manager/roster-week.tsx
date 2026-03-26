@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-type Profile = { id: string; full_name: string | null };
+type Profile = {
+  id: string;
+  full_name: string | null;
+  preferred_name: string | null;
+};
 
 type ShiftCostRow = {
   shift_id: number;
@@ -51,6 +55,8 @@ type RecurringOverride = {
   store_id: string;
 };
 
+type EventCategory = "ANNUAL_LEAVE" | "SICK_LEAVE" | "LEAVE" | "UNAVAILABLE";
+
 type UnavailOccurrence = {
   kind: "oneoff" | "recurring";
   id: number;
@@ -63,6 +69,14 @@ type UnavailOccurrence = {
   isSkippedThisWeek?: boolean;
 };
 
+type StaffPayRateRow = {
+  staff_id: string;
+  weekday_rate: number;
+  saturday_rate: number;
+  sunday_rate: number;
+  holiday_rate: number;
+};
+
 const dayLabels = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"] as const;
 
 const WAK_BLUE = "#1E5A9E";
@@ -72,6 +86,21 @@ const CARD_BG = "#FFFFFF";
 const BORDER = "#E5E7EB";
 const TEXT = "#111827";
 const MUTED = "#6B7280";
+
+const SHIFT_BG = "#F7FBFF";
+const SHIFT_BORDER = "#D9E6F7";
+
+const HOLIDAY_BG = "#FFFBEF";
+const HOLIDAY_BORDER = "#F3E2A7";
+const HOLIDAY_TEXT = "#8A5A00";
+
+const LEAVE_BG = "#F5F3FF";
+const LEAVE_BORDER = "#D8B4FE";
+const LEAVE_TEXT = "#7C3AED";
+
+const UNAV_BG = "#FFF6F6";
+const UNAV_BORDER = "#F4B4B4";
+const UNAV_TEXT = "#991B1B";
 
 function toISODate(d: Date) {
   const yyyy = d.getFullYear();
@@ -107,12 +136,21 @@ function weekRangeText(weekStartISO: string) {
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
   const fmt = (d: Date) =>
-    d.toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+    d.toLocaleDateString([], {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
   return `${fmt(start)} → ${fmt(end)}`;
 }
 
 function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function dayIndexFromISO(iso: string) {
@@ -133,10 +171,6 @@ function overlaps(aStartISO: string, aEndISO: string, bStartISO: string, bEndISO
 function hhmmss_to_hhmm(t: string) {
   return (t || "").slice(0, 5);
 }
-function hhmm_to_hhmmss(t: string) {
-  if (!t) return "00:00:00";
-  return t.length === 5 ? `${t}:00` : t;
-}
 
 function fmtHeaderDate(d: Date) {
   return d.toLocaleDateString([], { day: "2-digit", month: "short" });
@@ -156,6 +190,15 @@ function buildISOFromDayAndTime(dayDate: Date, hhmm: string) {
   const d = new Date(dayDate);
   d.setHours(hh, mm, 0, 0);
   return d.toISOString();
+}
+
+function minutesBetween(startISO: string, endISO: string) {
+  const ms = new Date(endISO).getTime() - new Date(startISO).getTime();
+  return Math.max(0, Math.round(ms / 60000));
+}
+
+function hoursBetween(startISO: string, endISO: string) {
+  return minutesBetween(startISO, endISO) / 60;
 }
 
 function actionButton(
@@ -193,15 +236,15 @@ function actionButton(
       disabled={disabled}
       style={{
         padding: "12px 16px",
-        minHeight: 46,
+        minHeight: 44,
         borderRadius: 12,
         border: `1px solid ${borderColor}`,
         background: bg,
         color: textColor,
         fontWeight: 800,
-        fontSize: 15,
+        fontSize: 14,
         cursor: disabled ? "not-allowed" : "pointer",
-        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
+        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.08)" : "none",
         whiteSpace: "nowrap",
       }}
     >
@@ -210,20 +253,52 @@ function actionButton(
   );
 }
 
-function badge(label: string, kind: "green" | "yellow" | "blue" | "gray" | "red" = "gray") {
+function subtleButton(
+  label: string,
+  onClick: () => void,
+  options?: { disabled?: boolean; active?: boolean }
+) {
+  const disabled = options?.disabled;
+  const active = options?.active;
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "10px 14px",
+        minHeight: 38,
+        borderRadius: 10,
+        border: `1px solid ${active ? WAK_BLUE : BORDER}`,
+        background: active ? "#EEF5FF" : "#fff",
+        color: active ? WAK_BLUE : TEXT,
+        fontWeight: 700,
+        fontSize: 13,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.55 : 1,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function badge(label: string, kind: "green" | "yellow" | "blue" | "gray" | "red" | "purple" = "gray") {
   const styles: Record<string, { bg: string; color: string }> = {
     green: { bg: "#DCFCE7", color: "#166534" },
     yellow: { bg: "#FEF3C7", color: "#92400E" },
     blue: { bg: "#EAF3FF", color: WAK_BLUE },
     gray: { bg: "#F3F4F6", color: "#374151" },
     red: { bg: "#FEE2E2", color: "#991B1B" },
+    purple: { bg: "#F5F3FF", color: "#7C3AED" },
   };
 
   return (
     <span
       style={{
         display: "inline-block",
-        padding: "6px 10px",
+        padding: "5px 9px",
         borderRadius: 999,
         fontSize: 12,
         fontWeight: 800,
@@ -267,6 +342,134 @@ function statCard(label: string, value: string, color?: string, extra?: React.Re
   );
 }
 
+function downloadCSV(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* Victoria public holidays */
+function easterSunday(year: number) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+function nthWeekdayOfMonth(year: number, month0: number, weekday: number, nth: number) {
+  const d = new Date(year, month0, 1);
+  const diff = (weekday - d.getDay() + 7) % 7;
+  d.setDate(1 + diff + (nth - 1) * 7);
+  return d;
+}
+
+function firstWeekdayOfMonth(year: number, month0: number, weekday: number) {
+  return nthWeekdayOfMonth(year, month0, weekday, 1);
+}
+
+function addDaysDate(d: Date, days: number) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function victoriaPublicHolidays(year: number) {
+  const easter = easterSunday(year);
+  const holidays: { date: string; label: string }[] = [];
+
+  holidays.push({ date: toISODate(new Date(year, 0, 1)), label: "New Year's Day" });
+  holidays.push({ date: toISODate(new Date(year, 0, 26)), label: "Australia Day" });
+  holidays.push({ date: toISODate(nthWeekdayOfMonth(year, 2, 1, 2)), label: "Labour Day" });
+  holidays.push({ date: toISODate(addDaysDate(easter, -2)), label: "Good Friday" });
+  holidays.push({ date: toISODate(addDaysDate(easter, -1)), label: "Saturday before Easter Sunday" });
+  holidays.push({ date: toISODate(easter), label: "Easter Sunday" });
+  holidays.push({ date: toISODate(addDaysDate(easter, 1)), label: "Easter Monday" });
+  holidays.push({ date: toISODate(new Date(year, 3, 25)), label: "ANZAC Day" });
+  holidays.push({ date: toISODate(nthWeekdayOfMonth(year, 5, 1, 2)), label: "King's Birthday" });
+  holidays.push({ date: toISODate(firstWeekdayOfMonth(year, 10, 2)), label: "Melbourne Cup" });
+  holidays.push({ date: toISODate(new Date(year, 11, 25)), label: "Christmas Day" });
+  holidays.push({ date: toISODate(new Date(year, 11, 26)), label: "Boxing Day" });
+
+  const newYear = new Date(year, 0, 1);
+  if (newYear.getDay() === 6 || newYear.getDay() === 0) {
+    holidays.push({
+      date: toISODate(nthWeekdayOfMonth(year, 0, 1, 1)),
+      label: "Additional New Year's Day holiday",
+    });
+  }
+
+  const australiaDay = new Date(year, 0, 26);
+  if (australiaDay.getDay() === 6 || australiaDay.getDay() === 0) {
+    const sub = new Date(australiaDay);
+    sub.setDate(australiaDay.getDate() + ((8 - australiaDay.getDay()) % 7));
+    holidays.push({ date: toISODate(sub), label: "Australia Day (substitute holiday)" });
+  }
+
+  const christmas = new Date(year, 11, 25);
+  if (christmas.getDay() === 6 || christmas.getDay() === 0) {
+    const sub = new Date(christmas);
+    sub.setDate(christmas.getDate() + ((8 - christmas.getDay()) % 7));
+    holidays.push({ date: toISODate(sub), label: "Christmas Day (additional holiday)" });
+  }
+
+  const boxingDay = new Date(year, 11, 26);
+  if (boxingDay.getDay() === 6 || boxingDay.getDay() === 0) {
+    const sub = new Date(boxingDay);
+    sub.setDate(boxingDay.getDate() + ((8 - boxingDay.getDay()) % 7));
+    holidays.push({ date: toISODate(sub), label: "Boxing Day (additional holiday)" });
+  }
+
+  const aflGrandFinalEveOverrides: Record<number, string> = {
+    2025: "2025-09-26",
+    // 2026: "2026-09-25",
+  };
+
+  if (aflGrandFinalEveOverrides[year]) {
+    holidays.push({
+      date: aflGrandFinalEveOverrides[year],
+      label: "Friday before AFL Grand Final",
+    });
+  }
+
+  return holidays.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function isVictoriaPublicHolidayISO(dateISO: string) {
+  const d = new Date(dateISO);
+  const dayOnly = toISODate(d);
+  const list = victoriaPublicHolidays(d.getFullYear());
+  return list.some((h) => h.date === dayOnly);
+}
+
+function getEventCategory(reason: string | null, kind: "oneoff" | "recurring"): EventCategory {
+  if (kind === "recurring") return "UNAVAILABLE";
+
+  const text = (reason ?? "").toLowerCase();
+  if (text.includes("annual leave")) return "ANNUAL_LEAVE";
+  if (text.includes("sick leave")) return "SICK_LEAVE";
+  if (text.includes("leave")) return "LEAVE";
+  return "UNAVAILABLE";
+}
+
+function isPaidLeaveCategory(cat: EventCategory) {
+  return cat === "ANNUAL_LEAVE" || cat === "SICK_LEAVE";
+}
+
 export default function RosterWeek() {
   const [storeId] = useState("MOOROOLBARK");
   const [weekStart, setWeekStart] = useState(() => getThisWeekThuISO());
@@ -292,6 +495,7 @@ export default function RosterWeek() {
   const [oneOff, setOneOff] = useState<UnavailOneOffRow[]>([]);
   const [recRules, setRecRules] = useState<UnavailRecurringRule[]>([]);
   const [recOverrides, setRecOverrides] = useState<RecurringOverride[]>([]);
+  const [payRates, setPayRates] = useState<StaffPayRateRow[]>([]);
   const [msg, setMsg] = useState("");
 
   const [isPublished, setIsPublished] = useState<boolean>(false);
@@ -300,7 +504,7 @@ export default function RosterWeek() {
   const [ratesLoading, setRatesLoading] = useState<boolean>(false);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<"shift" | "unavail">("shift");
+  const [drawerTab, setDrawerTab] = useState<"shift" | "unavail" | "leave">("shift");
   const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
   const [drawerStaffId, setDrawerStaffId] = useState<string>("");
   const [drawerDayIdx, setDrawerDayIdx] = useState<number>(0);
@@ -312,21 +516,29 @@ export default function RosterWeek() {
   const [unStartTime, setUnStartTime] = useState("17:00");
   const [unEndTime, setUnEndTime] = useState("21:00");
   const [unReason, setUnReason] = useState("");
+  const [leaveType, setLeaveType] = useState<"ANNUAL_LEAVE" | "SICK_LEAVE">("ANNUAL_LEAVE");
 
   function staffName(id: string) {
     const p = profiles.find((x) => x.id === id);
-    return p?.full_name?.trim() ? p.full_name : id.slice(0, 8);
+    const preferred = p?.preferred_name?.trim() ?? "";
+    const full = p?.full_name?.trim() ?? "";
+    return preferred || full || id.slice(0, 8);
   }
 
   async function getHourlyRateForShift(staffId: string, shiftStartISO: string): Promise<number> {
     const { data, error } = await supabase
       .from("staff_pay_rates")
-      .select("weekday_rate, saturday_rate, sunday_rate")
+      .select("weekday_rate, saturday_rate, sunday_rate, holiday_rate")
       .eq("staff_id", staffId)
+      .eq("store_id", storeId)
       .single();
 
     if (error || !data) {
       throw new Error("Could not find pay rate for this staff member.");
+    }
+
+    if (isVictoriaPublicHolidayISO(shiftStartISO)) {
+      return Number(data.holiday_rate ?? 0);
     }
 
     const day = new Date(shiftStartISO).getDay();
@@ -336,13 +548,36 @@ export default function RosterWeek() {
   }
 
   async function loadProfiles() {
-    const p = await supabase.from("profiles").select("id, full_name");
+    const p = await supabase.from("profiles").select("id, full_name, preferred_name");
     if (p.error) {
       console.log(p.error);
       setProfiles([]);
       return;
     }
     setProfiles((p.data ?? []) as any);
+  }
+
+  async function loadPayRates() {
+    const r = await supabase
+      .from("staff_pay_rates")
+      .select("staff_id, weekday_rate, saturday_rate, sunday_rate, holiday_rate")
+      .eq("store_id", storeId);
+
+    if (r.error) {
+      console.log(r.error);
+      setPayRates([]);
+      return;
+    }
+
+    setPayRates(
+      (r.data ?? []).map((x: any) => ({
+        staff_id: x.staff_id,
+        weekday_rate: Number(x.weekday_rate ?? 0),
+        saturday_rate: Number(x.saturday_rate ?? 0),
+        sunday_rate: Number(x.sunday_rate ?? 0),
+        holiday_rate: Number(x.holiday_rate ?? 0),
+      }))
+    );
   }
 
   async function loadShiftCosts() {
@@ -444,6 +679,7 @@ export default function RosterWeek() {
 
   async function loadAll() {
     await loadProfiles();
+    await loadPayRates();
     await loadShiftCosts();
     await loadOneOffUnavailability();
     await loadRecurringRules();
@@ -538,7 +774,8 @@ export default function RosterWeek() {
 
       const rateRes = await supabase
         .from("staff_pay_rates")
-        .select("staff_id, weekday_rate, saturday_rate, sunday_rate")
+        .select("staff_id, weekday_rate, saturday_rate, sunday_rate, holiday_rate")
+        .eq("store_id", storeId)
         .in("staff_id", uniqueStaffIds);
 
       if (rateRes.error) {
@@ -548,7 +785,7 @@ export default function RosterWeek() {
 
       const rateByStaff: Record<
         string,
-        { weekday_rate: number; saturday_rate: number; sunday_rate: number }
+        { weekday_rate: number; saturday_rate: number; sunday_rate: number; holiday_rate: number }
       > = {};
 
       for (const r of rateRes.data ?? []) {
@@ -556,6 +793,7 @@ export default function RosterWeek() {
           weekday_rate: Number((r as any).weekday_rate ?? 0),
           saturday_rate: Number((r as any).saturday_rate ?? 0),
           sunday_rate: Number((r as any).sunday_rate ?? 0),
+          holiday_rate: Number((r as any).holiday_rate ?? 0),
         };
       }
 
@@ -565,11 +803,15 @@ export default function RosterWeek() {
         const rateRow = rateByStaff[s.staff_id];
         if (!rateRow) continue;
 
-        const day = new Date(s.shift_start).getDay();
-
         let nextRate = rateRow.weekday_rate;
-        if (day === 6) nextRate = rateRow.saturday_rate;
-        if (day === 0) nextRate = rateRow.sunday_rate;
+
+        if (isVictoriaPublicHolidayISO(s.shift_start)) {
+          nextRate = rateRow.holiday_rate;
+        } else {
+          const day = new Date(s.shift_start).getDay();
+          if (day === 6) nextRate = rateRow.saturday_rate;
+          if (day === 0) nextRate = rateRow.sunday_rate;
+        }
 
         const currentRate = Number(s.hourly_rate ?? 0);
         const latestRate = Number(nextRate ?? 0);
@@ -715,6 +957,7 @@ export default function RosterWeek() {
 
   useEffect(() => {
     loadProfiles();
+    loadPayRates();
   }, []);
 
   useEffect(() => {
@@ -723,8 +966,15 @@ export default function RosterWeek() {
     loadRecurringRules();
     loadRecurringOverrides();
     loadPublishedStatus();
+    loadPayRates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart]);
+
+  const payRateByStaff = useMemo(() => {
+    const map: Record<string, StaffPayRateRow> = {};
+    for (const r of payRates) map[r.staff_id] = r;
+    return map;
+  }, [payRates]);
 
   const staffIds = useMemo(() => {
     const set = new Set<string>();
@@ -794,7 +1044,7 @@ export default function RosterWeek() {
     return occ;
   }, [recRules, range.start, skippedRuleIds]);
 
-  const allUnavail = useMemo(() => {
+  const allEvents = useMemo(() => {
     const one = oneOff.map((u) => ({
       kind: "oneoff" as const,
       id: u.id,
@@ -807,11 +1057,11 @@ export default function RosterWeek() {
     return [...one, ...recurringOccurrences];
   }, [oneOff, recurringOccurrences]);
 
-  const unavGrid = useMemo(() => {
+  const eventGrid = useMemo(() => {
     const g: Record<string, UnavailOccurrence[][]> = {};
     staffIds.forEach((sid) => (g[sid] = Array.from({ length: 7 }, () => [])));
 
-    allUnavail.forEach((u) => {
+    allEvents.forEach((u) => {
       for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
         const dayStart = new Date(range.start);
         dayStart.setDate(dayStart.getDate() + dayIdx);
@@ -828,7 +1078,7 @@ export default function RosterWeek() {
     });
 
     return g;
-  }, [allUnavail, staffIds, range.start]);
+  }, [allEvents, staffIds, range.start]);
 
   const storeTotalHours = rows.reduce((sum, r) => sum + r.hours_worked, 0);
   const storeTotalWage = rows.reduce((sum, r) => sum + (r.estimated_wage ?? 0), 0);
@@ -843,7 +1093,45 @@ export default function RosterWeek() {
     return totals;
   }, [rows]);
 
+  const weeklySummaryByStaff = useMemo(() => {
+    const out: Record<string, { totalHours: number; wage: number }> = {};
+    for (const sid of staffIds) {
+      out[sid] = { totalHours: 0, wage: 0 };
+    }
+
+    for (const r of rows) {
+      out[r.staff_id] ??= { totalHours: 0, wage: 0 };
+      out[r.staff_id].totalHours += Number(r.hours_worked ?? 0);
+      out[r.staff_id].wage += Number(r.estimated_wage ?? 0);
+    }
+
+    for (const e of allEvents) {
+      const cat = getEventCategory(e.reason, e.kind);
+      if (!isPaidLeaveCategory(cat)) continue;
+
+      const hrs = hoursBetween(e.start_at, e.end_at);
+      const weekdayRate = Number(payRateByStaff[e.staff_id]?.weekday_rate ?? 0);
+
+      out[e.staff_id] ??= { totalHours: 0, wage: 0 };
+      out[e.staff_id].totalHours += hrs;
+      out[e.staff_id].wage += hrs * weekdayRate;
+    }
+
+    return out;
+  }, [staffIds, rows, allEvents, payRateByStaff]);
+
   const todayISO = toISODate(new Date());
+
+  const holidayMap = useMemo(() => {
+    const years = Array.from(new Set(dayDates.map((d) => d.getFullYear())));
+    const map: Record<string, string> = {};
+    for (const y of years) {
+      for (const h of victoriaPublicHolidays(y)) {
+        map[h.date] = h.label;
+      }
+    }
+    return map;
+  }, [dayDates]);
 
   function closeDrawer() {
     setDrawerOpen(false);
@@ -862,6 +1150,7 @@ export default function RosterWeek() {
     setUnStartTime("17:00");
     setUnEndTime("21:00");
     setUnReason("");
+    setLeaveType("ANNUAL_LEAVE");
 
     setDrawerOpen(true);
     setMsg("");
@@ -882,6 +1171,7 @@ export default function RosterWeek() {
     setUnStartTime("17:00");
     setUnEndTime("21:00");
     setUnReason("");
+    setLeaveType("ANNUAL_LEAVE");
 
     setDrawerOpen(true);
     setMsg("");
@@ -903,20 +1193,64 @@ export default function RosterWeek() {
     setMsg("");
   }
 
+  function openDrawerForLeave(staffId: string, dayIdx: number) {
+    setDrawerStaffId(staffId);
+    setDrawerDayIdx(dayIdx);
+
+    setDrawerTab("leave");
+    setDrawerMode("add");
+    setDrawerShiftId(null);
+
+    setUnStartTime("17:00");
+    setUnEndTime("21:00");
+    setUnReason("");
+    setLeaveType("ANNUAL_LEAVE");
+
+    setDrawerOpen(true);
+    setMsg("");
+  }
+
   const drawerDayDate = useMemo(() => dayDates[drawerDayIdx], [dayDates, drawerDayIdx]);
 
-  const drawerDayUnav = useMemo(() => {
+  const drawerDayEvents = useMemo(() => {
     if (!drawerStaffId) return [];
-    return (unavGrid[drawerStaffId]?.[drawerDayIdx] ?? []) as UnavailOccurrence[];
-  }, [unavGrid, drawerStaffId, drawerDayIdx]);
+    return (eventGrid[drawerStaffId]?.[drawerDayIdx] ?? []) as UnavailOccurrence[];
+  }, [eventGrid, drawerStaffId, drawerDayIdx]);
 
-  const drawerRecRulesInCell = useMemo(() => drawerDayUnav.filter((x) => x.kind === "recurring"), [drawerDayUnav]);
-  const drawerOneOffInCell = useMemo(() => drawerDayUnav.filter((x) => x.kind === "oneoff"), [drawerDayUnav]);
+  const drawerLeavesInCell = useMemo(
+    () =>
+      drawerDayEvents.filter((x) => {
+        const cat = getEventCategory(x.reason, x.kind);
+        return cat === "ANNUAL_LEAVE" || cat === "SICK_LEAVE" || cat === "LEAVE";
+      }),
+    [drawerDayEvents]
+  );
+
+  const drawerUnavailInCell = useMemo(
+    () =>
+      drawerDayEvents.filter((x) => {
+        const cat = getEventCategory(x.reason, x.kind);
+        return cat === "UNAVAILABLE";
+      }),
+    [drawerDayEvents]
+  );
+
+  const drawerRecRulesInCell = useMemo(
+    () => drawerUnavailInCell.filter((x) => x.kind === "recurring"),
+    [drawerUnavailInCell]
+  );
+
+  const drawerOneOffUnavailInCell = useMemo(
+    () => drawerUnavailInCell.filter((x) => x.kind === "oneoff"),
+    [drawerUnavailInCell]
+  );
 
   function warnIfUnavailable(staffId: string, startISO: string, endISO: string) {
-    const list = allUnavail.filter((u) => u.staff_id === staffId && u.store_id === storeId);
+    const list = allEvents.filter((u) => u.staff_id === staffId && u.store_id === storeId);
 
     const hit = list.find((u) => {
+      const cat = getEventCategory(u.reason, u.kind);
+      if (cat !== "UNAVAILABLE") return false;
       if (u.kind === "recurring" && u.isSkippedThisWeek) return false;
       return overlaps(startISO, endISO, u.start_at, u.end_at);
     });
@@ -1012,22 +1346,27 @@ export default function RosterWeek() {
       return;
     }
 
-    setMsg((prev) => (prev.startsWith("⚠️") ? prev + " ✅ Updated." : "✅ Updated!"));
+    setMsg((prev) => (prev.startsWith("⚠️") ? prev + " ✅ Shift updated." : "✅ Updated!"));
     closeDrawer();
     await loadShiftCosts();
   }
 
   async function deleteShiftFromDrawer() {
-    if (!drawerShiftId) return;
-    if (!confirm("Delete this shift?")) return;
+    setMsg("");
 
-    const d = await supabase.from("shifts").delete().eq("id", drawerShiftId);
-    if (d.error) {
-      setMsg("❌ Delete failed: " + d.error.message);
+    if (!drawerShiftId) {
+      setMsg("❌ Missing shift id.");
       return;
     }
 
-    setMsg("✅ Deleted!");
+    const del = await supabase.from("shifts").delete().eq("id", drawerShiftId);
+
+    if (del.error) {
+      setMsg("❌ Delete failed: " + del.error.message);
+      return;
+    }
+
+    setMsg("✅ Shift deleted.");
     closeDrawer();
     await loadShiftCosts();
   }
@@ -1039,6 +1378,10 @@ export default function RosterWeek() {
       setMsg("❌ Missing staff.");
       return;
     }
+    if (drawerDayIdx < 0 || drawerDayIdx > 6) {
+      setMsg("❌ Missing day.");
+      return;
+    }
     if (!unStartTime || !unEndTime) {
       setMsg("❌ Please fill start/end time.");
       return;
@@ -1046,58 +1389,130 @@ export default function RosterWeek() {
 
     const jsDow = cellDayIdxToJsDow(drawerDayIdx);
 
-    const { data: userData } = await supabase.auth.getUser();
-    const uid = userData.user?.id ?? null;
-
     const ins = await supabase.from("staff_unavailability_recurring").insert(
       [
         {
           staff_id: drawerStaffId,
           store_id: storeId,
           day_of_week: jsDow,
-          start_time: hhmm_to_hhmmss(unStartTime),
-          end_time: hhmm_to_hhmmss(unEndTime),
-          reason: unReason.trim() === "" ? null : unReason.trim(),
-          created_by: uid,
+          start_time: `${unStartTime}:00`,
+          end_time: `${unEndTime}:00`,
+          reason: unReason.trim() || null,
         },
       ],
       { returning: "minimal" } as any
     );
 
     if (ins.error) {
-      setMsg("❌ Add unavailable failed: " + ins.error.message);
+      setMsg("❌ Add weekly unavailable failed: " + ins.error.message);
       return;
     }
 
-    setMsg("✅ Weekly unavailable rule added (repeats every week).");
+    setMsg("✅ Weekly unavailable added.");
     setUnReason("");
+    closeDrawer();
     await loadRecurringRules();
     await loadRecurringOverrides();
+  }
+
+  async function deleteOneOffEvent(id: number) {
+    setMsg("");
+    const del = await supabase.from("staff_unavailability").delete().eq("id", id);
+    if (del.error) {
+      setMsg("❌ Delete failed: " + del.error.message);
+      return;
+    }
+    setMsg("✅ Removed.");
+    await loadOneOffUnavailability();
   }
 
   async function deleteRecurringRule(ruleId: number) {
-    if (!confirm("Delete this weekly unavailable rule?")) return;
-    const d = await supabase.from("staff_unavailability_recurring").delete().eq("id", ruleId);
-    if (d.error) {
-      setMsg("❌ Delete failed: " + d.error.message);
+    setMsg("");
+    const del = await supabase.from("staff_unavailability_recurring").delete().eq("id", ruleId);
+    if (del.error) {
+      setMsg("❌ Delete weekly rule failed: " + del.error.message);
       return;
     }
-    setMsg("✅ Deleted weekly rule.");
+    setMsg("✅ Weekly unavailable rule removed.");
     await loadRecurringRules();
     await loadRecurringOverrides();
   }
 
-  async function skipRuleThisWeek(ruleId: number) {
+  async function skipRecurringRuleThisWeek(ruleId: number) {
     setMsg("");
+
+    const ins = await supabase.from("staff_unavailability_recurring_overrides").upsert(
+      [{ rule_id: ruleId, week_start: weekStart, store_id: storeId }],
+      { onConflict: "rule_id,week_start" }
+    );
+
+    if (ins.error) {
+      setMsg("❌ Skip this week failed: " + ins.error.message);
+      return;
+    }
+
+    setMsg("✅ Weekly rule skipped for this week.");
+    await loadRecurringOverrides();
+  }
+
+  async function unskipRecurringRuleThisWeek(ruleId: number) {
+    setMsg("");
+
+    const del = await supabase
+      .from("staff_unavailability_recurring_overrides")
+      .delete()
+      .eq("rule_id", ruleId)
+      .eq("week_start", weekStart)
+      .eq("store_id", storeId);
+
+    if (del.error) {
+      setMsg("❌ Unskip failed: " + del.error.message);
+      return;
+    }
+
+    setMsg("✅ Weekly rule restored for this week.");
+    await loadRecurringOverrides();
+  }
+
+  async function saveAddLeaveFromDrawer() {
+    setMsg("");
+
+    if (!drawerStaffId) {
+      setMsg("❌ Missing staff.");
+      return;
+    }
+    if (!drawerDayDate) {
+      setMsg("❌ Missing day.");
+      return;
+    }
+    if (!unStartTime || !unEndTime) {
+      setMsg("❌ Please fill start/end time.");
+      return;
+    }
+
+    const startISO = buildISOFromDayAndTime(drawerDayDate, unStartTime);
+    let endISO = buildISOFromDayAndTime(drawerDayDate, unEndTime);
+
+    if (new Date(endISO).getTime() <= new Date(startISO).getTime()) {
+      const end = new Date(endISO);
+      end.setDate(end.getDate() + 1);
+      endISO = end.toISOString();
+    }
+
     const { data: userData } = await supabase.auth.getUser();
     const uid = userData.user?.id ?? null;
 
-    const ins = await supabase.from("staff_unavailability_recurring_overrides").insert(
+    const label = leaveType === "ANNUAL_LEAVE" ? "Annual Leave" : "Sick Leave";
+    const finalReason = unReason.trim() ? `${label} | ${unReason.trim()}` : label;
+
+    const ins = await supabase.from("staff_unavailability").insert(
       [
         {
-          rule_id: ruleId,
-          week_start: weekStart,
+          staff_id: drawerStaffId,
           store_id: storeId,
+          start_at: startISO,
+          end_at: endISO,
+          reason: finalReason,
           created_by: uid,
         },
       ],
@@ -1105,90 +1520,43 @@ export default function RosterWeek() {
     );
 
     if (ins.error) {
-      if (ins.error.message.toLowerCase().includes("duplicate") || ins.error.message.toLowerCase().includes("unique")) {
-        setMsg("ℹ️ This rule is already skipped for this week.");
-        return;
-      }
-      setMsg("❌ Skip failed: " + ins.error.message);
+      setMsg("❌ Add leave failed: " + ins.error.message);
       return;
     }
 
-    setMsg("✅ Skipped this weekly unavailable rule for this week only.");
-    await loadRecurringOverrides();
+    setMsg(`✅ ${label} added.`);
+    setUnReason("");
+    setLeaveType("ANNUAL_LEAVE");
+    closeDrawer();
+    await loadOneOffUnavailability();
   }
 
-  async function undoSkipRuleThisWeek(ruleId: number) {
-    setMsg("");
-    const del = await supabase
-      .from("staff_unavailability_recurring_overrides")
-      .delete()
-      .eq("store_id", storeId)
-      .eq("week_start", weekStart)
-      .eq("rule_id", ruleId);
+  function exportWeekCSV() {
+    const header = [
+      "staff_name",
+      "staff_id",
+      "date",
+      "shift_start",
+      "shift_end",
+      "hours_worked",
+      "applied_rate",
+      "estimated_wage",
+    ].join(",");
 
-    if (del.error) {
-      setMsg("❌ Undo skip failed: " + del.error.message);
-      return;
-    }
-
-    setMsg("✅ Undo skip: weekly rule applies again for this week.");
-    await loadRecurringOverrides();
-  }
-
-  function downloadCSV(filename: string, csvText: string) {
-    const blob = new Blob([csvText], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function exportPayrollSummary() {
-    const map = new Map<string, { name: string; hours: number; wage: number }>();
-    staffIds.forEach((sid) => map.set(sid, { name: staffName(sid), hours: 0, wage: 0 }));
-
-    rows.forEach((r) => {
-      const cur = map.get(r.staff_id) ?? { name: staffName(r.staff_id), hours: 0, wage: 0 };
-      cur.hours += r.hours_worked;
-      cur.wage += r.estimated_wage ?? 0;
-      map.set(r.staff_id, cur);
-    });
-
-    const lines = [
-      ["WeekStart(THU)", weekStart].join(","),
-      "",
-      "Staff Name,Staff ID,Total Hours,Total Wage",
-      ...Array.from(map.entries()).map(([sid, v]) =>
-        [`"${v.name.replaceAll('"', '""')}"`, sid, v.hours.toFixed(2), v.wage.toFixed(2)].join(",")
-      ),
-      "",
-      `Store Total Hours,${storeTotalHours.toFixed(2)}`,
-      `Store Total Wage,${storeTotalWage.toFixed(2)}`,
-    ];
-
-    downloadCSV(`payroll_summary_${storeId}_${weekStart}.csv`, lines.join("\n"));
-  }
-
-  function exportPayrollDetail() {
-    const header = "Staff Name,Staff ID,Shift Date,Start,End,Hours,Rate,Wage";
     const lines = rows.map((r) => {
-      const d = new Date(r.shift_start);
-      const shiftDate = d.toLocaleDateString();
       return [
-        `"${staffName(r.staff_id).replaceAll('"', '""')}"`,
+        `"${staffName(r.staff_id).replace(/"/g, '""')}"`,
         r.staff_id,
-        `"${shiftDate}"`,
-        `"${fmtTime(r.shift_start)}"`,
-        `"${fmtTime(r.shift_end)}"`,
-        r.hours_worked.toFixed(2),
-        (r.applied_rate ?? 0).toFixed(2),
-        (r.estimated_wage ?? 0).toFixed(2),
+        toISODate(new Date(r.shift_start)),
+        r.shift_start,
+        r.shift_end,
+        Number(r.hours_worked ?? 0).toFixed(2),
+        Number(r.applied_rate ?? 0).toFixed(2),
+        Number(r.estimated_wage ?? 0).toFixed(2),
       ].join(",");
     });
 
-    downloadCSV(`payroll_detail_${storeId}_${weekStart}.csv`, [header, ...lines].join("\n"));
+    downloadCSV(`roster_week_${storeId}_${weekStart}.csv`, [header, ...lines].join("\n"));
   }
 
   return (
@@ -1255,9 +1623,14 @@ export default function RosterWeek() {
           <div>
             <b>Date:</b> {drawerDayDate ? fmtHeaderDate(drawerDayDate) : "—"}
           </div>
+          {drawerDayDate && holidayMap[toISODate(drawerDayDate)] ? (
+            <div style={{ marginTop: 6, color: HOLIDAY_TEXT, fontWeight: 800 }}>
+              Public Holiday — {holidayMap[toISODate(drawerDayDate)]}
+            </div>
+          ) : null}
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <button
             onClick={() => setDrawerTab("shift")}
             style={{
@@ -1271,6 +1644,7 @@ export default function RosterWeek() {
           >
             Shift
           </button>
+
           <button
             onClick={() => setDrawerTab("unavail")}
             style={{
@@ -1284,6 +1658,20 @@ export default function RosterWeek() {
           >
             Unavailable
           </button>
+
+          <button
+            onClick={() => setDrawerTab("leave")}
+            style={{
+              fontWeight: 800,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: `1px solid ${BORDER}`,
+              background: drawerTab === "leave" ? "#F3F4F6" : "#fff",
+              cursor: "pointer",
+            }}
+          >
+            Leave
+          </button>
         </div>
 
         {drawerTab === "shift" ? (
@@ -1294,12 +1682,22 @@ export default function RosterWeek() {
 
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Start (24h)</div>
-              <input type="time" value={drawerStartTime} onChange={(e) => setDrawerStartTime(e.target.value)} style={inputStyle("100%")} />
+              <input
+                type="time"
+                value={drawerStartTime}
+                onChange={(e) => setDrawerStartTime(e.target.value)}
+                style={inputStyle("100%")}
+              />
             </div>
 
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>End (24h)</div>
-              <input type="time" value={drawerEndTime} onChange={(e) => setDrawerEndTime(e.target.value)} style={inputStyle("100%")} />
+              <input
+                type="time"
+                value={drawerEndTime}
+                onChange={(e) => setDrawerEndTime(e.target.value)}
+                style={inputStyle("100%")}
+              />
               <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
                 If end time is earlier than start, it will be treated as overnight.
               </div>
@@ -1327,20 +1725,38 @@ export default function RosterWeek() {
                 background: "#FAFAFA",
               }}
             >
-              <div style={{ fontWeight: 900, marginBottom: 6, color: TEXT }}>This day — Unavailability</div>
+              <div style={{ fontWeight: 900, marginBottom: 6, color: TEXT }}>This day — Unavailable</div>
 
-              {drawerOneOffInCell.length > 0 ? (
+              {drawerOneOffUnavailInCell.length > 0 ? (
                 <div style={{ fontSize: 12, color: MUTED, marginBottom: 10 }}>
                   <b>One-off</b>
-                  {drawerOneOffInCell.slice(0, 4).map((u) => (
-                    <div key={`oneoff-${u.id}`} style={{ marginTop: 4 }}>
-                      {fmtTime(u.start_at)}–{fmtTime(u.end_at)}
-                      {u.reason ? ` | ${u.reason}` : ""} (one-off)
+                  {drawerOneOffUnavailInCell.slice(0, 6).map((u) => (
+                    <div
+                      key={`oneoff-${u.id}`}
+                      style={{
+                        marginTop: 8,
+                        padding: 10,
+                        border: `1px solid ${UNAV_BORDER}`,
+                        borderRadius: 10,
+                        background: UNAV_BG,
+                      }}
+                    >
+                      <div style={{ fontWeight: 800, color: UNAV_TEXT }}>
+                        {fmtTime(u.start_at)}–{fmtTime(u.end_at)}
+                      </div>
+                      <div style={{ color: MUTED, marginTop: 4 }}>
+                        {u.reason ? u.reason : "No reason"} (one-off)
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        {actionButton("Delete one-off", () => deleteOneOffEvent(u.id), {
+                          danger: true,
+                        })}
+                      </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>No one-off unavailability shown here.</div>
+                <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>No one-off unavailable shown here.</div>
               )}
 
               {drawerRecRulesInCell.length > 0 ? (
@@ -1354,21 +1770,27 @@ export default function RosterWeek() {
                         style={{
                           marginTop: 8,
                           padding: 10,
-                          border: "1px solid #e6e6e6",
+                          border: `1px solid ${UNAV_BORDER}`,
                           borderRadius: 10,
-                          background: "#fff",
+                          background: UNAV_BG,
                         }}
                       >
-                        <div style={{ fontWeight: 900, color: skipped ? "#999" : TEXT }}>
+                        <div style={{ fontWeight: 900, color: skipped ? "#999" : UNAV_TEXT }}>
                           {fmtTime(u.start_at)}–{fmtTime(u.end_at)}{" "}
-                          <span style={{ fontWeight: 700, fontSize: 12 }}>{skipped ? "(skipped this week)" : "(weekly)"}</span>
+                          <span style={{ fontWeight: 700, fontSize: 12 }}>
+                            {skipped ? "(skipped this week)" : ""}
+                          </span>
                         </div>
-                        {u.reason ? <div style={{ marginTop: 2, color: MUTED }}>Reason: {u.reason}</div> : null}
 
-                        <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <div style={{ marginTop: 4, color: MUTED }}>{u.reason || "No reason"}</div>
+
+                        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                           {!skipped
-                            ? actionButton("Skip this week", () => skipRuleThisWeek(u.id))
-                            : actionButton("Undo skip", () => undoSkipRuleThisWeek(u.id))}
+                            ? actionButton("Skip this week", () => skipRecurringRuleThisWeek(u.id))
+                            : actionButton("Restore this week", () => unskipRecurringRuleThisWeek(u.id), {
+                                primary: true,
+                              })}
+
                           {actionButton("Delete rule", () => deleteRecurringRule(u.id), { danger: true })}
                         </div>
                       </div>
@@ -1376,7 +1798,7 @@ export default function RosterWeek() {
                   })}
                 </div>
               ) : (
-                <div style={{ fontSize: 12, color: "#999" }}>No weekly rule on this day yet.</div>
+                <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>No weekly rule for this day.</div>
               )}
             </div>
 
@@ -1388,30 +1810,160 @@ export default function RosterWeek() {
                 background: "#fff",
               }}
             >
-              <div style={{ fontWeight: 900, marginBottom: 8, color: TEXT }}>Add Unavailable (Weekly repeating)</div>
+              <div style={{ fontWeight: 900, marginBottom: 8, color: TEXT }}>Add Weekly Unavailable</div>
 
               <div style={{ marginBottom: 8 }}>
                 <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Start (24h)</div>
-                <input type="time" value={unStartTime} onChange={(e) => setUnStartTime(e.target.value)} style={inputStyle("100%")} />
+                <input
+                  type="time"
+                  value={unStartTime}
+                  onChange={(e) => setUnStartTime(e.target.value)}
+                  style={inputStyle("100%")}
+                />
               </div>
 
               <div style={{ marginBottom: 8 }}>
                 <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>End (24h)</div>
-                <input type="time" value={unEndTime} onChange={(e) => setUnEndTime(e.target.value)} style={inputStyle("100%")} />
+                <input
+                  type="time"
+                  value={unEndTime}
+                  onChange={(e) => setUnEndTime(e.target.value)}
+                  style={inputStyle("100%")}
+                />
               </div>
 
               <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Reason (optional)</div>
-                <input value={unReason} onChange={(e) => setUnReason(e.target.value)} style={inputStyle("100%")} />
+                <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Reason</div>
+                <input
+                  value={unReason}
+                  onChange={(e) => setUnReason(e.target.value)}
+                  placeholder="Optional reason"
+                  style={inputStyle("100%")}
+                />
               </div>
 
               {actionButton("Save weekly unavailable", saveAddUnavailRecurringFromDrawer, { primary: true })}
             </div>
           </div>
         ) : null}
+
+        {drawerTab === "leave" ? (
+          <div>
+            <div
+              style={{
+                marginBottom: 14,
+                padding: 12,
+                border: `1px solid ${BORDER}`,
+                borderRadius: 12,
+                background: "#FAFAFA",
+              }}
+            >
+              <div style={{ fontWeight: 900, marginBottom: 6, color: TEXT }}>This day — Leave</div>
+
+              {drawerLeavesInCell.length > 0 ? (
+                <div style={{ fontSize: 12, color: MUTED }}>
+                  {drawerLeavesInCell.map((u) => {
+                    const cat = getEventCategory(u.reason, u.kind);
+                    const title =
+                      cat === "ANNUAL_LEAVE"
+                        ? "Annual Leave"
+                        : cat === "SICK_LEAVE"
+                        ? "Sick Leave"
+                        : "Leave";
+
+                    return (
+                      <div
+                        key={`leave-${u.kind}-${u.id}`}
+                        style={{
+                          marginTop: 8,
+                          padding: 10,
+                          border: `1px solid ${LEAVE_BORDER}`,
+                          borderRadius: 10,
+                          background: LEAVE_BG,
+                        }}
+                      >
+                        <div style={{ fontWeight: 800, color: LEAVE_TEXT }}>
+                          {fmtTime(u.start_at)}–{fmtTime(u.end_at)}
+                        </div>
+                        <div style={{ color: MUTED, marginTop: 4 }}>
+                          {title} | {hoursBetween(u.start_at, u.end_at).toFixed(2)}h
+                        </div>
+                        <div style={{ color: MUTED, marginTop: 4 }}>{u.reason || "No reason"}</div>
+                        {u.kind === "oneoff" ? (
+                          <div style={{ marginTop: 8 }}>
+                            {actionButton("Delete leave", () => deleteOneOffEvent(u.id), {
+                              danger: true,
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>No leave shown here.</div>
+              )}
+            </div>
+
+            <div
+              style={{
+                padding: 12,
+                border: `1px solid ${BORDER}`,
+                borderRadius: 12,
+                background: "#fff",
+              }}
+            >
+              <div style={{ fontWeight: 900, marginBottom: 8, color: TEXT }}>Add Leave (One-off)</div>
+
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Leave Type</div>
+                <select
+                  value={leaveType}
+                  onChange={(e) => setLeaveType(e.target.value as "ANNUAL_LEAVE" | "SICK_LEAVE")}
+                  style={inputStyle("100%")}
+                >
+                  <option value="ANNUAL_LEAVE">Annual Leave</option>
+                  <option value="SICK_LEAVE">Sick Leave</option>
+                </select>
+              </div>
+
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Start (24h)</div>
+                <input
+                  type="time"
+                  value={unStartTime}
+                  onChange={(e) => setUnStartTime(e.target.value)}
+                  style={inputStyle("100%")}
+                />
+              </div>
+
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>End (24h)</div>
+                <input
+                  type="time"
+                  value={unEndTime}
+                  onChange={(e) => setUnEndTime(e.target.value)}
+                  style={inputStyle("100%")}
+                />
+              </div>
+
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Note (optional)</div>
+                <input
+                  value={unReason}
+                  onChange={(e) => setUnReason(e.target.value)}
+                  placeholder="Optional note"
+                  style={inputStyle("100%")}
+                />
+              </div>
+
+              {actionButton("Save Leave", saveAddLeaveFromDrawer, { primary: true })}
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      <div style={{ maxWidth: 1360, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1480, margin: "0 auto" }}>
         <div
           style={{
             border: `1px solid ${BORDER}`,
@@ -1468,25 +2020,25 @@ export default function RosterWeek() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-end" }}>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                {actionButton("← Prev Week", () => setWeekStart((w) => addDaysISO(w, -7)), {
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {subtleButton("Prev Week", () => setWeekStart((w) => addDaysISO(w, -7)), {
                   disabled: copyLoading || ratesLoading,
                 })}
-                {actionButton("This Week", () => setWeekStart(getThisWeekThuISO()), {
-                  primary: true,
+                {subtleButton("This Week", () => setWeekStart(getThisWeekThuISO()), {
+                  active: true,
                   disabled: copyLoading || ratesLoading,
                 })}
-                {actionButton("Next Week →", handleNextWeek, {
+                {subtleButton("Next Week", handleNextWeek, {
                   disabled: copyLoading || ratesLoading,
                 })}
               </div>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                {actionButton("Copy from previous week", handleCopyFromPreviousWeek, {
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {subtleButton("Copy Prev", handleCopyFromPreviousWeek, {
                   disabled: copyLoading || ratesLoading || pubLoading,
                 })}
-                {actionButton(
-                  "Apply Latest Rates",
+                {subtleButton(
+                  "Update Rates",
                   async () => {
                     if (!confirm("Apply the latest pay rates to all shifts in this week?")) return;
                     await applyLatestRatesForWeek();
@@ -1495,11 +2047,14 @@ export default function RosterWeek() {
                     disabled: copyLoading || ratesLoading || pubLoading,
                   }
                 )}
-                {actionButton("Refresh", loadAll, {
+                {subtleButton("Refresh", loadAll, {
+                  disabled: copyLoading || ratesLoading || pubLoading,
+                })}
+                {subtleButton("Export CSV", exportWeekCSV, {
                   disabled: copyLoading || ratesLoading || pubLoading,
                 })}
                 {!isPublished
-                  ? actionButton("Publish this week", publishWeek, {
+                  ? actionButton("Publish", publishWeek, {
                       primary: true,
                       disabled: pubLoading || copyLoading || ratesLoading,
                     })
@@ -1513,9 +2068,14 @@ export default function RosterWeek() {
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {statCard("Week start", weekStart)}
-            {statCard("Roster status", "", undefined, isPublished ? badge("PUBLISHED", "green") : badge("DRAFT", "yellow"))}
-            {statCard("Store total hours", `${storeTotalHours.toFixed(2)}h`, WAK_BLUE)}
-            {statCard("Store total wage", `$${storeTotalWage.toFixed(2)}`, WAK_RED)}
+            {statCard(
+              "Roster status",
+              "",
+              undefined,
+              isPublished ? badge("PUBLISHED", "green") : badge("DRAFT", "yellow")
+            )}
+            {statCard("Shift hours", `${storeTotalHours.toFixed(2)}h`, WAK_BLUE)}
+            {statCard("Shift wage", `$${storeTotalWage.toFixed(2)}`, WAK_RED)}
           </div>
         </div>
 
@@ -1547,7 +2107,7 @@ export default function RosterWeek() {
           <div style={{ marginBottom: 12 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Weekly Roster Board</h2>
             <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Click empty space to add shift, click a shift card to edit, click unavailable block to manage rules.
+              Click empty space to add shift, click a shift card to edit, click leave or unavailable blocks to manage them.
             </div>
           </div>
 
@@ -1564,7 +2124,7 @@ export default function RosterWeek() {
               style={{
                 borderCollapse: "separate",
                 borderSpacing: 0,
-                minWidth: 1000,
+                minWidth: 900,
                 width: "100%",
               }}
             >
@@ -1579,9 +2139,9 @@ export default function RosterWeek() {
                       left: 0,
                       zIndex: 4,
                       background: "#FAFAFA",
-                      minWidth: 130,
-                      width: 130,
-                      maxWidth: 130,
+                      minWidth: 50,
+                      width: 80,
+                      maxWidth: 80,
                       padding: "14px 10px",
                       textAlign: "left",
                       color: TEXT,
@@ -1593,27 +2153,49 @@ export default function RosterWeek() {
                   {dayLabels.map((d, i) => {
                     const dayISO = toISODate(dayDates[i]);
                     const isToday = dayISO === todayISO;
+                    const holidayLabel = holidayMap[dayISO] ?? null;
 
                     return (
                       <th
-                        key={d}
+                        key={`${d}-${i}`}
                         style={{
                           borderBottom: `1px solid ${BORDER}`,
                           borderRight: `1px solid ${BORDER}`,
                           position: "sticky",
                           top: 0,
                           zIndex: 3,
-                          background: isToday ? "#F7FBFF" : "#FAFAFA",
-                          minWidth: 130,
+                          background: holidayLabel ? "#FFF9E8" : "#FAFAFA",
+                          minWidth: 120,
+                          width: 120,
                           padding: "12px 10px",
                           textAlign: "left",
+                          verticalAlign: "top",
                         }}
                       >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: 8,
+                            flexWrap: "wrap",
+                          }}
+                        >
                           <div style={{ fontWeight: 800, color: TEXT }}>{d}</div>
-                          {isToday ? badge("TODAY", "blue") : null}
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {isToday ? badge("TODAY", "blue") : null}
+                            {holidayLabel ? badge("PUBLIC HOLIDAY", "yellow") : null}
+                          </div>
                         </div>
+
                         <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{fmtHeaderDate(dayDates[i])}</div>
+
+                        {holidayLabel ? (
+                          <div style={{ fontSize: 12, color: HOLIDAY_TEXT, marginTop: 4, fontWeight: 700 }}>
+                            {holidayLabel}
+                          </div>
+                        ) : null}
+
                         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
                           Day total: <b style={{ color: TEXT }}>{dailyTotals[i].hours.toFixed(2)}h</b> |{" "}
                           <b style={{ color: TEXT }}>${dailyTotals[i].wage.toFixed(2)}</b>
@@ -1625,133 +2207,174 @@ export default function RosterWeek() {
                   <th
                     style={{
                       borderBottom: `1px solid ${BORDER}`,
-                      borderRight: `1px solid ${BORDER}`,
                       position: "sticky",
                       top: 0,
-                      zIndex: 3,
+                      right: 0,
+                      zIndex: 4,
                       background: "#FAFAFA",
                       minWidth: 100,
+                      width: 100,
                       padding: "12px 10px",
                       textAlign: "left",
-                      color: TEXT,
+                      verticalAlign: "top",
                     }}
                   >
-                    WEEK HOURS
-                  </th>
-
-                  <th
-                    style={{
-                      borderBottom: `1px solid ${BORDER}`,
-                      position: "sticky",
-                      top: 0,
-                      zIndex: 3,
-                      background: "#FAFAFA",
-                      minWidth: 100,
-                      padding: "12px 10px",
-                      textAlign: "left",
-                      color: TEXT,
-                    }}
-                  >
-                    WEEK WAGE
+                    <div style={{ fontWeight: 800, color: TEXT }}>WEEKLY SUMMARY</div>
+                    <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Total Hours / Wage</div>
                   </th>
                 </tr>
               </thead>
 
               <tbody>
-                {staffIds.map((sid) => {
-                  const cells = grid[sid] ?? Array.from({ length: 7 }, () => []);
-                  const uCells = unavGrid[sid] ?? Array.from({ length: 7 }, () => []);
+                {staffIds.map((sid) => (
+                  <tr key={sid}>
+                    <td
+                      style={{
+                        position: "sticky",
+                        left: 0,
+                        zIndex: 2,
+                        background: "#fff",
+                        borderRight: `1px solid ${BORDER}`,
+                        borderBottom: `1px solid ${BORDER}`,
+                        padding: "14px 10px",
+                        verticalAlign: "top",
+                      }}
+                    >
+                      <div style={{ fontWeight: 900, color: TEXT }}>{staffName(sid)}</div>
+                    </td>
 
-                  const staffHours = cells.flat().reduce((sum, r) => sum + r.hours_worked, 0);
-                  const staffWage = cells.flat().reduce((sum, r) => sum + (r.estimated_wage ?? 0), 0);
+                    {Array.from({ length: 7 }, (_, dayIdx) => {
+                      const dayRows = grid[sid]?.[dayIdx] ?? [];
+                      const dayEvents = eventGrid[sid]?.[dayIdx] ?? [];
+                      const holidayLabel = holidayMap[toISODate(dayDates[dayIdx])] ?? null;
 
-                  return (
-                    <tr key={sid}>
-                      <td
-                        style={{
-                          borderRight: `1px solid ${BORDER}`,
-                          borderBottom: `1px solid ${BORDER}`,
-                          position: "sticky",
-                          left: 0,
-                          zIndex: 2,
-                          background: "#fff",
-                          fontWeight: 800,
-                          whiteSpace: "nowrap",
-                          minWidth: 50,
-                          padding: "14px 12px",
-                          color: TEXT,
-                          verticalAlign: "top",
-                        }}
-                      >
-                        {staffName(sid)}
-                      </td>
+                      const dayLeaves = dayEvents.filter((u) => {
+                        const cat = getEventCategory(u.reason, u.kind);
+                        return cat === "ANNUAL_LEAVE" || cat === "SICK_LEAVE" || cat === "LEAVE";
+                      });
 
-                      {cells.map((cell, dayIdx) => {
-                        const dayUnav = uCells[dayIdx] ?? [];
+                      const dayUnav = dayEvents.filter((u) => {
+                        const cat = getEventCategory(u.reason, u.kind);
+                        return cat === "UNAVAILABLE";
+                      });
 
-                        const hasActiveUnav =
-                          dayUnav.some((u) => u.kind === "oneoff") ||
-                          dayUnav.some((u) => u.kind === "recurring" && !u.isSkippedThisWeek);
+                      const hasActiveUnav = dayUnav.some((u) => !(u.kind === "recurring" && u.isSkippedThisWeek));
 
-                        const recInCell = dayUnav.filter((x) => x.kind === "recurring");
+                      return (
+                        <td
+                          key={`${sid}-${dayIdx}`}
+                          onClick={() => openDrawerFromCell(sid, dayIdx)}
+                          style={{
+                            borderRight: `1px solid ${BORDER}`,
+                            borderBottom: `1px solid ${BORDER}`,
+                            padding: 10,
+                            verticalAlign: "top",
+                            background: hasActiveUnav ? "#FFF8F8" : holidayLabel ? "#FFFDF5" : "#fff",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {holidayLabel && (
+                            <div
+                              style={{
+                                fontSize: 12,
+                                marginBottom: 8,
+                                padding: "8px 10px",
+                                border: `1px solid ${HOLIDAY_BORDER}`,
+                                borderRadius: 10,
+                                background: HOLIDAY_BG,
+                                color: HOLIDAY_TEXT,
+                                fontWeight: 800,
+                              }}
+                            >
+                              Public Holiday — {holidayLabel}
+                            </div>
+                          )}
 
-                        return (
-                          <td
-                            key={dayIdx}
-                            onClick={() => openDrawerFromCell(sid, dayIdx)}
-                            style={{
-                              borderRight: `1px solid ${BORDER}`,
-                              borderBottom: `1px solid ${BORDER}`,
-                              verticalAlign: "top",
-                              minWidth: 165,
-                              background: hasActiveUnav ? "#FFF1F1" : "#fff",
-                              cursor: "pointer",
-                              padding: 10,
-                            }}
-                            title="Click to add shift / manage unavailable"
-                          >
-                            {dayUnav.length > 0 && (
-                              <div
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openDrawerForUnavailable(sid, dayIdx);
-                                }}
-                                style={{
-                                  fontSize: 12,
-                                  marginBottom: 8,
-                                  padding: "8px 10px",
-                                  border: "1px solid #F3D3D3",
-                                  borderRadius: 10,
-                                  background: "#fff",
-                                  cursor: "pointer",
-                                }}
-                                title="Click to manage unavailable"
-                              >
-                                <div style={{ fontWeight: 800, color: "#991B1B", marginBottom: 4 }}>Unavailable</div>
-                                {dayUnav.slice(0, 2).map((u) => (
+                          {dayLeaves.length > 0 ? (
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openDrawerForLeave(sid, dayIdx);
+                              }}
+                              style={{
+                                marginBottom: 8,
+                                padding: 10,
+                                border: `1px solid ${LEAVE_BORDER}`,
+                                borderRadius: 12,
+                                background: LEAVE_BG,
+                              }}
+                            >
+                              <div style={{ fontWeight: 800, color: LEAVE_TEXT, marginBottom: 4 }}>Leave</div>
+
+                              {dayLeaves.slice(0, 3).map((u, idx) => {
+                                const cat = getEventCategory(u.reason, u.kind);
+                                const title =
+                                  cat === "ANNUAL_LEAVE"
+                                    ? "Annual Leave"
+                                    : cat === "SICK_LEAVE"
+                                    ? "Sick Leave"
+                                    : "Leave";
+
+                                return (
                                   <div
-                                    key={`${u.kind}-${u.id}`}
-                                    style={{ color: u.kind === "recurring" && u.isSkippedThisWeek ? "#999" : MUTED }}
+                                    key={`${u.kind}-${u.id}-${idx}`}
+                                    style={{ fontSize: 12, color: TEXT, marginTop: 4 }}
                                   >
-                                    {fmtTime(u.start_at)}–{fmtTime(u.end_at)}
-                                    {u.reason ? ` | ${u.reason}` : ""}
-                                    {u.kind === "recurring"
-                                      ? u.isSkippedThisWeek
-                                        ? " (weekly, skipped)"
-                                        : " (weekly)"
-                                      : " (one-off)"}
+                                    {fmtTime(u.start_at)}–{fmtTime(u.end_at)} | {hoursBetween(u.start_at, u.end_at).toFixed(2)}h
+                                    <div style={{ color: MUTED, marginTop: 2 }}>
+                                      {title}
+                                      {u.kind === "oneoff" ? " (one-off)" : ""}
+                                    </div>
                                   </div>
-                                ))}
-                                {dayUnav.length > 2 && <div style={{ color: MUTED }}>+{dayUnav.length - 2} more…</div>}
-                                {recInCell.length > 0 ? (
-                                  <div style={{ color: MUTED, marginTop: 4 }}>Click to Skip/Undo/Delete</div>
-                                ) : null}
-                              </div>
-                            )}
+                                );
+                              })}
 
-                            {cell.length === 0 ? <div style={{ color: "#999", fontSize: 13 }}>—</div> : null}
+                              {dayLeaves.length > 3 ? (
+                                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                                  +{dayLeaves.length - 3} more
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
 
-                            {cell.map((r) => (
+                          {dayUnav.length > 0 ? (
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openDrawerForUnavailable(sid, dayIdx);
+                              }}
+                              style={{
+                                marginBottom: 8,
+                                padding: 10,
+                                border: `1px solid ${UNAV_BORDER}`,
+                                borderRadius: 12,
+                                background: UNAV_BG,
+                              }}
+                            >
+                              <div style={{ fontWeight: 800, color: UNAV_TEXT, marginBottom: 4 }}>Unavailable</div>
+
+                              {dayUnav.slice(0, 3).map((u, idx) => (
+                                <div key={`${u.kind}-${u.id}-${idx}`} style={{ fontSize: 12, color: TEXT, marginTop: 4 }}>
+                                  {fmtTime(u.start_at)}–{fmtTime(u.end_at)}
+                                  {u.reason ? ` | ${u.reason}` : ""}
+                                  {u.kind === "recurring"
+                                    ? u.isSkippedThisWeek
+                                      ? " (rule skipped)"
+                                      : " (weekly)"
+                                    : " (one-off)"}
+                                </div>
+                              ))}
+
+                              {dayUnav.length > 3 ? (
+                                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                                  +{dayUnav.length - 3} more
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          <div style={{ display: "grid", gap: 8 }}>
+                            {dayRows.map((r) => (
                               <div
                                 key={r.shift_id}
                                 onClick={(e) => {
@@ -1759,116 +2382,61 @@ export default function RosterWeek() {
                                   openDrawerForEditShift(r);
                                 }}
                                 style={{
-                                  cursor: "pointer",
-                                  marginBottom: 8,
-                                  padding: "10px 12px",
-                                  border: "1px solid #E6E6E6",
+                                  padding: 10,
+                                  border: `1px solid ${SHIFT_BORDER}`,
                                   borderRadius: 12,
-                                  background: "#FAFAFA",
+                                  background: SHIFT_BG,
+                                  boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
                                 }}
-                                title="Click to edit shift"
                               >
-                                <div style={{ fontWeight: 900, color: TEXT }}>
+                                <div style={{ fontWeight: 900, color: WAK_BLUE }}>
                                   {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
                                 </div>
-                                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>{r.hours_worked.toFixed(2)}h</div>
-                                <div style={{ fontSize: 12, color: MUTED }}>
-                                  Rate ${(r.applied_rate ?? 0).toFixed(2)} | Wage ${(r.estimated_wage ?? 0).toFixed(2)}
+                                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                                  {r.hours_worked.toFixed(2)}h | Rate ${Number(r.applied_rate ?? 0).toFixed(2)}
+                                </div>
+                                <div style={{ fontSize: 12, color: TEXT, marginTop: 2 }}>
+                                  Wage ${Number(r.estimated_wage ?? 0).toFixed(2)}
                                 </div>
                               </div>
                             ))}
-                          </td>
-                        );
-                      })}
+                          </div>
 
-                      <td
-                        style={{
-                          borderRight: `1px solid ${BORDER}`,
-                          borderBottom: `1px solid ${BORDER}`,
-                          fontWeight: 800,
-                          color: TEXT,
-                          padding: "14px 12px",
-                          verticalAlign: "top",
-                          background: "#fff",
-                        }}
-                      >
-                        {staffHours.toFixed(2)}
-                      </td>
+                          {dayRows.length === 0 && dayLeaves.length === 0 && dayUnav.length === 0 ? (
+                            <div style={{ fontSize: 12, color: "#9CA3AF" }}>Click to add</div>
+                          ) : null}
+                        </td>
+                      );
+                    })}
 
-                      <td
-                        style={{
-                          borderBottom: `1px solid ${BORDER}`,
-                          fontWeight: 800,
-                          color: TEXT,
-                          padding: "14px 12px",
-                          verticalAlign: "top",
-                          background: "#fff",
-                        }}
-                      >
-                        ${staffWage.toFixed(2)}
-                      </td>
-                    </tr>
-                  );
-                })}
+                    <td
+                      style={{
+                        position: "sticky",
+                        right: 0,
+                        zIndex: 2,
+                        background: "#fff",
+                        borderBottom: `1px solid ${BORDER}`,
+                        padding: "12px 10px",
+                        verticalAlign: "top",
+                        minWidth: 100,
+                        width: 100,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: MUTED }}>Total Hours</div>
+                      <div style={{ fontWeight: 900, color: TEXT, marginBottom: 10 }}>
+                        {Number(weeklySummaryByStaff[sid]?.totalHours ?? 0).toFixed(2)}h
+                      </div>
+
+                      <div style={{ fontSize: 12, color: MUTED }}>Wage</div>
+                      <div style={{ fontWeight: 900, color: WAK_RED }}>
+                        ${Number(weeklySummaryByStaff[sid]?.wage ?? 0).toFixed(2)}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
-        </div>
-
-        <div
-          style={{
-            border: `1px solid ${BORDER}`,
-            borderRadius: 18,
-            background: CARD_BG,
-            padding: 18,
-            marginBottom: 16,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
-          }}
-        >
-          <h3 style={{ marginTop: 0, color: TEXT }}>Store Summary (Week)</h3>
-          <div style={{ color: TEXT, marginBottom: 6 }}>
-            Total Hours: <b>{storeTotalHours.toFixed(2)}</b>
-          </div>
-          <div style={{ color: TEXT }}>
-            Total Wage: <b>${storeTotalWage.toFixed(2)}</b>
-          </div>
-        </div>
-
-        <div
-          style={{
-            border: `1px solid ${BORDER}`,
-            borderRadius: 18,
-            background: CARD_BG,
-            padding: 18,
-            marginBottom: 16,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
-          }}
-        >
-          <h3 style={{ marginTop: 0, color: TEXT }}>Payroll Export</h3>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {actionButton("Export Payroll (Summary CSV)", exportPayrollSummary)}
-            {actionButton("Export Payroll (Detail CSV)", exportPayrollDetail)}
-          </div>
-        </div>
-
-        <div
-          style={{
-            border: `1px solid ${BORDER}`,
-            borderRadius: 18,
-            background: CARD_BG,
-            padding: 18,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
-          }}
-        >
-          <h3 style={{ marginTop: 0, color: TEXT }}>Notes</h3>
-          <ul style={{ color: MUTED, margin: 0, paddingLeft: 20, lineHeight: 1.7 }}>
-            <li>Click empty cell space to add a shift.</li>
-            <li>Click a shift card to edit that shift.</li>
-            <li>Click the unavailable block to manage weekly rules and skips.</li>
-            <li>Next Week will auto-copy this week only when next week is empty.</li>
-            <li>Copy from previous week will only work when this week is empty.</li>
-            <li>Apply Latest Rates updates this week’s existing shifts to the latest current pay rates.</li>
-          </ul>
         </div>
       </div>
     </div>

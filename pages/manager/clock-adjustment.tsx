@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 type Range = { startISO: string; endISO: string };
@@ -18,7 +18,6 @@ type Shift = {
   shift_end: string;
   break_minutes?: number | null;
   hourly_rate?: number | null;
-
   shift_status?: ShiftStatus | null;
   shift_status_note?: string | null;
   shift_status_updated_by?: string | null;
@@ -31,7 +30,6 @@ type TimeClock = {
   staff_id: string;
   clock_in_at: string | null;
   clock_out_at: string | null;
-
   adjusted_clock_in_at?: string | null;
   adjusted_clock_out_at?: string | null;
   adjusted_reason?: string | null;
@@ -42,11 +40,37 @@ type TimeClock = {
 type Profile = {
   id: string;
   full_name: string | null;
+  preferred_name?: string | null;
   role?: string | null;
   is_active?: boolean | null;
 };
 
-type DayType = "WEEKDAY" | "SATURDAY" | "SUNDAY";
+type StaffPayRate = {
+  staff_id: string;
+  weekday_rate: number | null;
+  saturday_rate: number | null;
+  sunday_rate: number | null;
+  holiday_rate: number | null;
+};
+
+type LeaveRecord = {
+  id: number;
+  staff_id: string;
+  start_at: string;
+  end_at: string;
+  reason: string | null;
+};
+
+type PayClass =
+  | "WEEKDAY"
+  | "SATURDAY"
+  | "SUNDAY"
+  | "PUBLIC_HOLIDAY"
+  | "SICK_LEAVE"
+  | "ANNUAL_LEAVE"
+  | "ABSENT"
+  | "CANCELLED"
+  | "COVERED";
 
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
@@ -114,12 +138,11 @@ function todayDateInputValue() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function getDayTypeByISO(iso: string): DayType {
-  const d = new Date(iso);
-  const day = d.getDay();
-  if (day === 0) return "SUNDAY";
-  if (day === 6) return "SATURDAY";
-  return "WEEKDAY";
+function toISODate(d: Date) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function toLocalInputValue(iso: string | null | undefined) {
@@ -132,6 +155,100 @@ function toLocalInputValue(iso: string | null | undefined) {
   )}`;
 }
 
+function easterSunday(year: number) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+function nthWeekdayOfMonth(year: number, month0: number, weekday: number, nth: number) {
+  const d = new Date(year, month0, 1);
+  const diff = (weekday - d.getDay() + 7) % 7;
+  d.setDate(1 + diff + (nth - 1) * 7);
+  return d;
+}
+
+function firstWeekdayOfMonth(year: number, month0: number, weekday: number) {
+  return nthWeekdayOfMonth(year, month0, weekday, 1);
+}
+
+function addDaysDate(d: Date, days: number) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function victoriaPublicHolidays(year: number) {
+  const easter = easterSunday(year);
+  const holidays: { date: string; label: string }[] = [];
+
+  holidays.push({ date: toISODate(new Date(year, 0, 1)), label: "New Year's Day" });
+  holidays.push({ date: toISODate(new Date(year, 0, 26)), label: "Australia Day" });
+  holidays.push({ date: toISODate(nthWeekdayOfMonth(year, 2, 1, 2)), label: "Labour Day" });
+  holidays.push({ date: toISODate(addDaysDate(easter, -2)), label: "Good Friday" });
+  holidays.push({ date: toISODate(addDaysDate(easter, -1)), label: "Saturday before Easter Sunday" });
+  holidays.push({ date: toISODate(easter), label: "Easter Sunday" });
+  holidays.push({ date: toISODate(addDaysDate(easter, 1)), label: "Easter Monday" });
+  holidays.push({ date: toISODate(new Date(year, 3, 25)), label: "ANZAC Day" });
+  holidays.push({ date: toISODate(nthWeekdayOfMonth(year, 5, 1, 2)), label: "King's Birthday" });
+  holidays.push({ date: toISODate(firstWeekdayOfMonth(year, 10, 2)), label: "Melbourne Cup" });
+  holidays.push({ date: toISODate(new Date(year, 11, 25)), label: "Christmas Day" });
+  holidays.push({ date: toISODate(new Date(year, 11, 26)), label: "Boxing Day" });
+
+  const aflGrandFinalEveOverrides: Record<number, string> = {
+    2025: "2025-09-26",
+    // 2026: "2026-09-25",
+  };
+
+  if (aflGrandFinalEveOverrides[year]) {
+    holidays.push({
+      date: aflGrandFinalEveOverrides[year],
+      label: "Friday before AFL Grand Final",
+    });
+  }
+
+  return holidays.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function isVictoriaPublicHolidayISO(dateISO: string) {
+  const d = new Date(dateISO);
+  const list = victoriaPublicHolidays(d.getFullYear());
+  const dayOnly = toISODate(d);
+  return list.some((h) => h.date === dayOnly);
+}
+
+function getDayTypeByISO(iso: string): "WEEKDAY" | "SATURDAY" | "SUNDAY" {
+  const d = new Date(iso);
+  const day = d.getDay();
+  if (day === 0) return "SUNDAY";
+  if (day === 6) return "SATURDAY";
+  return "WEEKDAY";
+}
+
+function normalizeShiftStatus(v: any): ShiftStatus {
+  const s = String(v ?? "SCHEDULED").toUpperCase();
+  if (s === "WORKED" || s === "ABSENT" || s === "SICK" || s === "CANCELLED" || s === "COVERED") {
+    return s as ShiftStatus;
+  }
+  return "SCHEDULED";
+}
+
+function isNoPayStatus(status: ShiftStatus | null | undefined) {
+  return status === "ABSENT" || status === "CANCELLED" || status === "COVERED";
+}
+
 function actionButton(
   label: string,
   onClick: () => void,
@@ -142,25 +259,25 @@ function actionButton(
   const disabled = options?.disabled;
 
   let bg = "#fff";
-  let borderColor = BORDER;
+  let borderColor = "#D1D5DB";
   let textColor = TEXT;
 
   if (primary) {
-    bg = WAK_BLUE;
-    borderColor = WAK_BLUE;
-    textColor = "#fff";
+    bg = "#EEF5FF";
+    borderColor = "#C8DBF7";
+    textColor = WAK_BLUE;
   }
 
   if (danger) {
-    bg = WAK_RED;
-    borderColor = WAK_RED;
-    textColor = "#fff";
+    bg = "#FFF5F5";
+    borderColor = "#F3CDCD";
+    textColor = "#9A3E3E";
   }
 
   if (disabled) {
-    bg = "#D1D5DB";
-    borderColor = "#D1D5DB";
-    textColor = "#fff";
+    bg = "#F3F4F6";
+    borderColor = "#E5E7EB";
+    textColor = "#9CA3AF";
   }
 
   return (
@@ -168,16 +285,15 @@ function actionButton(
       onClick={onClick}
       disabled={disabled}
       style={{
-        padding: "8px 12px",
-        minHeight: 36,
-        borderRadius: 10,
+        padding: "6px 10px",
+        minHeight: 32,
+        borderRadius: 8,
         border: `1px solid ${borderColor}`,
         background: bg,
         color: textColor,
         fontWeight: 700,
-        fontSize: 13,
+        fontSize: 12,
         cursor: disabled ? "not-allowed" : "pointer",
-        boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
         whiteSpace: "nowrap",
       }}
     >
@@ -194,7 +310,7 @@ function infoCard(label: string, value: string, color?: string) {
         borderRadius: 10,
         background: "#F9FAFB",
         border: `1px solid ${BORDER}`,
-        minWidth: 130,
+        minWidth: 100,
       }}
     >
       <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
@@ -203,15 +319,19 @@ function infoCard(label: string, value: string, color?: string) {
   );
 }
 
-function badge(label: string, options?: { kind?: "blue" | "green" | "yellow" | "gray" | "red" }) {
+function badge(
+  label: string,
+  options?: { kind?: "blue" | "green" | "yellow" | "gray" | "red" | "purple" }
+) {
   const kind = options?.kind ?? "gray";
 
   const styles: Record<string, { bg: string; color: string }> = {
-    blue: { bg: "#EAF3FF", color: WAK_BLUE },
-    green: { bg: "#DCFCE7", color: "#166534" },
-    yellow: { bg: "#FEF3C7", color: "#92400E" },
-    gray: { bg: "#F3F4F6", color: "#374151" },
-    red: { bg: "#FEE2E2", color: "#991B1B" },
+    blue: { bg: "#EEF5FF", color: "#2D5F93" },
+    green: { bg: "#EDF7EF", color: "#2E6B3C" },
+    yellow: { bg: "#FFF8EA", color: "#8A6B22" },
+    gray: { bg: "#F3F4F6", color: "#4B5563" },
+    red: { bg: "#FFF1F1", color: "#9B4A4A" },
+    purple: { bg: "#F5F3FF", color: "#6D4BC4" },
   };
 
   return (
@@ -236,36 +356,13 @@ function inputStyle(width?: number | string) {
     width: width ?? "100%",
     maxWidth: "100%",
     boxSizing: "border-box" as const,
-    padding: "7px 10px",
+    padding: "6px 9px",
     borderRadius: 8,
     border: "1px solid #D1D5DB",
-    fontSize: 13,
+    fontSize: 12,
     background: "#fff",
     color: TEXT,
   };
-}
-
-function normalizeShiftStatus(v: any): ShiftStatus {
-  const s = String(v ?? "SCHEDULED").toUpperCase();
-  if (
-    s === "WORKED" ||
-    s === "ABSENT" ||
-    s === "SICK" ||
-    s === "CANCELLED" ||
-    s === "COVERED"
-  ) {
-    return s as ShiftStatus;
-  }
-  return "SCHEDULED";
-}
-
-function isNoPayStatus(status: ShiftStatus | null | undefined) {
-  return (
-    status === "ABSENT" ||
-    status === "SICK" ||
-    status === "CANCELLED" ||
-    status === "COVERED"
-  );
 }
 
 function statusBadge(status: ShiftStatus | null | undefined) {
@@ -273,30 +370,49 @@ function statusBadge(status: ShiftStatus | null | undefined) {
 
   if (s === "WORKED") return badge("WORKED", { kind: "green" });
   if (s === "ABSENT") return badge("ABSENT", { kind: "red" });
-  if (s === "SICK") return badge("SICK", { kind: "blue" });
+  if (s === "SICK") return badge("SICK", { kind: "purple" });
   if (s === "CANCELLED") return badge("CANCELLED", { kind: "gray" });
   if (s === "COVERED") return badge("COVERED", { kind: "yellow" });
   return badge("SCHEDULED", { kind: "gray" });
 }
 
 function getRowBackground(
-  alerts: { label: string; kind: "red" | "yellow" | "blue" | "gray" }[],
+  alerts: { label: string; kind: "red" | "yellow" | "blue" | "gray" | "purple" }[],
   shiftStatus?: ShiftStatus | null
 ) {
   const status = normalizeShiftStatus(shiftStatus);
 
-  if (status === "ABSENT") return "#FEF2F2";
-  if (status === "SICK") return "#EFF6FF";
-  if (status === "CANCELLED") return "#F9FAFB";
-  if (status === "COVERED") return "#FFFBEB";
+  if (status === "ABSENT") return "#FFF6F6";
+  if (status === "SICK") return "#F8F5FF";
+  if (status === "CANCELLED") return "#FAFAFA";
+  if (status === "COVERED") return "#FFFDF5";
 
   const labels = alerts.map((a) => a.label);
-
-  if (labels.includes("OPEN CLOCK")) return "#FEF2F2";
-  if (labels.includes("CROSSES MIDNIGHT") || labels.includes("LONG SHIFT")) return "#FFFBEA";
-  if (labels.includes("POSSIBLE COVER SHIFT")) return "#EFF6FF";
-
+  if (labels.includes("OPEN CLOCK")) return "#FFF6F6";
+  if (labels.includes("PUBLIC HOLIDAY")) return "#FFFDF5";
+  if (labels.includes("ANNUAL LEAVE")) return "#F8F5FF";
+  if (labels.includes("SICK LEAVE")) return "#F8F5FF";
+  if (labels.includes("POSSIBLE COVER SHIFT")) return "#F5F9FF";
   return "#FFFFFF";
+}
+
+function getLeaveCategory(reason: string | null): "ANNUAL_LEAVE" | "SICK_LEAVE" | null {
+  const text = (reason ?? "").toLowerCase();
+  if (text.includes("annual leave")) return "ANNUAL_LEAVE";
+  if (text.includes("sick leave")) return "SICK_LEAVE";
+  return null;
+}
+
+function payClassLabel(c: PayClass) {
+  if (c === "PUBLIC_HOLIDAY") return "Public Holiday";
+  if (c === "ANNUAL_LEAVE") return "Annual Leave";
+  if (c === "SICK_LEAVE") return "Sick Leave";
+  if (c === "SATURDAY") return "Saturday";
+  if (c === "SUNDAY") return "Sunday";
+  if (c === "WEEKDAY") return "Weekday";
+  if (c === "ABSENT") return "Absent";
+  if (c === "CANCELLED") return "Cancelled";
+  return "Covered";
 }
 
 export default function ClockAdjustmentPage() {
@@ -306,10 +422,21 @@ export default function ClockAdjustmentPage() {
 
   const isManagerOrOwner = viewerRole === "OWNER" || viewerRole === "MANAGER";
 
-  const topScrollRef = useRef<HTMLDivElement | null>(null);
-  const tableScrollRef = useRef<HTMLDivElement | null>(null);
-  const topInnerRef = useRef<HTMLDivElement | null>(null);
-  const syncingRef = useRef(false);
+  const [fromDate, setFromDate] = useState<string>(todayDateInputValue());
+  const [toDate, setToDate] = useState<string>(todayDateInputValue());
+  const [selectedStaffId, setSelectedStaffId] = useState<string>("ALL");
+
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const [shifts, setShifts] = useState<Shift[]>([]);
+  const [clocks, setClocks] = useState<TimeClock[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [payRates, setPayRates] = useState<StaffPayRate[]>([]);
+  const [leaveRows, setLeaveRows] = useState<LeaveRecord[]>([]);
+
+  const [editIn, setEditIn] = useState<Record<number, string>>({});
+  const [editOut, setEditOut] = useState<Record<number, string>>({});
 
   async function loadPermission() {
     setAuthLoading(true);
@@ -323,11 +450,7 @@ export default function ClockAdjustmentPage() {
 
     setViewerId(user.id);
 
-    const { data: profile, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single();
+    const { data: profile, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
     if (error) {
       setViewerRole(null);
@@ -343,28 +466,25 @@ export default function ClockAdjustmentPage() {
     loadPermission();
   }, []);
 
-  const [fromDate, setFromDate] = useState<string>(todayDateInputValue());
-  const [toDate, setToDate] = useState<string>(todayDateInputValue());
-  const [selectedStaffId, setSelectedStaffId] = useState<string>("ALL");
-
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  const [shifts, setShifts] = useState<Shift[]>([]);
-  const [clocks, setClocks] = useState<TimeClock[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-
-  const [editIn, setEditIn] = useState<Record<number, string>>({});
-  const [editOut, setEditOut] = useState<Record<number, string>>({});
-  const [editReason, setEditReason] = useState<Record<number, string>>({});
-
   const nameById = useMemo(() => {
     const map: Record<string, string> = {};
     for (const p of profiles) {
-      if (p?.id) map[p.id] = p.full_name ?? p.id;
+      if (p?.id) {
+        const preferred = (p.preferred_name ?? "").trim();
+        const full = (p.full_name ?? "").trim();
+        map[p.id] = preferred || full || p.id;
+      }
     }
     return map;
   }, [profiles]);
+
+  const weekdayRateByStaff = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const r of payRates) {
+      map[r.staff_id] = Number(r.weekday_rate ?? 0);
+    }
+    return map;
+  }, [payRates]);
 
   function staffLabel(staffId: string) {
     return nameById[staffId] ?? staffId;
@@ -382,7 +502,7 @@ export default function ClockAdjustmentPage() {
       const clockWindowStart = new Date(new Date(startISO).getTime() - 6 * 60 * 60 * 1000).toISOString();
       const clockWindowEnd = new Date(new Date(endISO).getTime() + 6 * 60 * 60 * 1000).toISOString();
 
-      const [shiftRes, clockRes, profileRes] = await Promise.all([
+      const [shiftRes, clockRes, profileRes, rateRes, leaveRes] = await Promise.all([
         supabase
           .from("shifts")
           .select("*")
@@ -399,19 +519,29 @@ export default function ClockAdjustmentPage() {
           .order("clock_in_at", { ascending: true })
           .limit(3000),
 
+        supabase.from("profiles").select("*").order("full_name", { ascending: true }),
+
+        supabase.from("staff_pay_rates").select("staff_id, weekday_rate, saturday_rate, sunday_rate, holiday_rate"),
+
         supabase
-          .from("profiles")
-          .select("*")
-          .order("full_name", { ascending: true }),
+          .from("staff_unavailability")
+          .select("id, staff_id, start_at, end_at, reason")
+          .lt("start_at", endISO)
+          .gt("end_at", startISO)
+          .order("start_at", { ascending: true }),
       ]);
 
       if (shiftRes.error) return setMsg("Error fetching shifts: " + shiftRes.error.message);
       if (clockRes.error) return setMsg("Error fetching time_clock: " + clockRes.error.message);
       if (profileRes.error) return setMsg("Error fetching profiles: " + profileRes.error.message);
+      if (rateRes.error) return setMsg("Error fetching pay rates: " + rateRes.error.message);
+      if (leaveRes.error) return setMsg("Error fetching leave: " + leaveRes.error.message);
 
       setShifts((shiftRes.data ?? []) as any);
       setClocks((clockRes.data ?? []) as any);
       setProfiles((profileRes.data ?? []) as any);
+      setPayRates((rateRes.data ?? []) as any);
+      setLeaveRows((leaveRes.data ?? []) as any);
     } catch (e: any) {
       setMsg("Error: " + (e?.message ?? String(e)));
     } finally {
@@ -421,6 +551,7 @@ export default function ClockAdjustmentPage() {
 
   useEffect(() => {
     if (!authLoading && isManagerOrOwner) fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, viewerRole]);
 
   function findClockForShift(shift: Shift) {
@@ -479,6 +610,18 @@ export default function ClockAdjustmentPage() {
     return candidates[0];
   }
 
+  function findLeaveForShift(shift: Shift) {
+    const matches = leaveRows.filter(
+      (l) =>
+        l.staff_id === shift.staff_id &&
+        overlaps(l.start_at, l.end_at, shift.shift_start, shift.shift_end) &&
+        getLeaveCategory(l.reason) !== null
+    );
+
+    if (matches.length === 0) return null;
+    return matches[0];
+  }
+
   async function createClockForShift(shift: Shift) {
     setLoading(true);
     setMsg("");
@@ -510,7 +653,6 @@ export default function ClockAdjustmentPage() {
     try {
       const inLocal = editIn[clockId] ?? "";
       const outLocal = editOut[clockId] ?? "";
-      const reason = (editReason[clockId] ?? "").trim();
 
       const adjustedInISO = inLocal ? new Date(inLocal).toISOString() : null;
       const adjustedOutISO = outLocal ? new Date(outLocal).toISOString() : null;
@@ -523,7 +665,7 @@ export default function ClockAdjustmentPage() {
       const payload: any = {
         adjusted_clock_in_at: adjustedInISO,
         adjusted_clock_out_at: adjustedOutISO,
-        adjusted_reason: reason || null,
+        adjusted_reason: null,
         adjusted_by: viewerId,
         adjusted_at: new Date().toISOString(),
       };
@@ -541,18 +683,14 @@ export default function ClockAdjustmentPage() {
     }
   }
 
-  async function updateShiftStatus(
-    shiftId: number,
-    status: ShiftStatus,
-    note?: string | null
-  ) {
+  async function updateShiftStatus(shiftId: number, status: ShiftStatus) {
     setLoading(true);
     setMsg("");
 
     try {
       const payload: any = {
         shift_status: status,
-        shift_status_note: note?.trim() ? note.trim() : null,
+        shift_status_note: null,
         shift_status_updated_by: viewerId,
         shift_status_updated_at: new Date().toISOString(),
       };
@@ -569,10 +707,6 @@ export default function ClockAdjustmentPage() {
     } finally {
       setLoading(false);
     }
-  }
-
-  async function restoreShiftToNormal(shiftId: number) {
-    await updateShiftStatus(shiftId, "SCHEDULED", null);
   }
 
   async function deleteShift(shiftId: number) {
@@ -618,22 +752,8 @@ export default function ClockAdjustmentPage() {
     setEditOut((p) => ({ ...p, [clockId]: toLocal(outVal) }));
   }
 
-  function getPayrollMinutes(shift: Shift, clock: TimeClock | null) {
+  function getPayrollResult(shift: Shift, clock: TimeClock | null, leave: LeaveRecord | null) {
     const status = normalizeShiftStatus(shift.shift_status);
-
-    if (isNoPayStatus(status)) {
-      return {
-        breakMin: shift.break_minutes ?? 0,
-        rosterWorkMin: 0,
-        rawWorkMin: 0,
-        adjWorkMin: 0,
-        payrollWorkMin: 0,
-        source: status,
-        rawMin: null,
-        adjMin: null,
-      };
-    }
-
     const breakMin = shift.break_minutes ?? 0;
 
     const rosterMin = minutesBetween(shift.shift_start, shift.shift_end);
@@ -643,19 +763,86 @@ export default function ClockAdjustmentPage() {
     const adjOut = clock?.adjusted_clock_out_at ?? null;
     const adjMin = adjIn && adjOut ? minutesBetween(adjIn, adjOut) : null;
 
-    const rosterWorkMin = rosterMin !== null ? Math.max(0, rosterMin - breakMin) : null;
+    const rosterWorkMin = rosterMin !== null ? Math.max(0, rosterMin - breakMin) : 0;
     const rawWorkMin = rawMin !== null ? Math.max(0, rawMin - breakMin) : null;
     const adjWorkMin = adjMin !== null ? Math.max(0, adjMin - breakMin) : null;
+
+    if (leave) {
+      const leaveType = getLeaveCategory(leave.reason);
+      const rate = Number(weekdayRateByStaff[shift.staff_id] ?? 0);
+      const payClass: PayClass = leaveType === "ANNUAL_LEAVE" ? "ANNUAL_LEAVE" : "SICK_LEAVE";
+      const hours = round2(rosterWorkMin / 60);
+      return {
+        payClass,
+        source: "LEAVE",
+        hours,
+        pay: round2(hours * rate),
+      };
+    }
+
+    if (status === "SICK") {
+      const rate = Number(weekdayRateByStaff[shift.staff_id] ?? 0);
+      const hours = round2(rosterWorkMin / 60);
+      return {
+        payClass: "SICK_LEAVE" as PayClass,
+        source: "STATUS",
+        hours,
+        pay: round2(hours * rate),
+      };
+    }
+
+    if (isNoPayStatus(status)) {
+      return {
+        payClass: status as PayClass,
+        source: status,
+        hours: 0,
+        pay: 0,
+      };
+    }
 
     const payrollWorkMin = adjWorkMin ?? rawWorkMin ?? rosterWorkMin;
     const source =
       adjWorkMin !== null ? "ADJUSTED" : rawWorkMin !== null ? "RAW" : rosterWorkMin !== null ? "ROSTER" : "NONE";
 
-    return { breakMin, rosterWorkMin, rawWorkMin, adjWorkMin, payrollWorkMin, source, rawMin, adjMin };
+    const hours = round2((payrollWorkMin ?? 0) / 60);
+
+    if (isVictoriaPublicHolidayISO(shift.shift_start)) {
+      return {
+        payClass: "PUBLIC_HOLIDAY" as PayClass,
+        source,
+        hours,
+        pay: round2(hours * Number(shift.hourly_rate ?? 0)),
+      };
+    }
+
+    const baseType = getDayTypeByISO(shift.shift_start);
+    return {
+      payClass: baseType as PayClass,
+      source,
+      hours,
+      pay: round2(hours * Number(shift.hourly_rate ?? 0)),
+    };
   }
 
-  function getAlerts(shift: Shift, clock: TimeClock | null, coverClock: TimeClock | null) {
-    const alerts: { label: string; kind: "red" | "yellow" | "blue" | "gray" }[] = [];
+  function getAlerts(
+    shift: Shift,
+    clock: TimeClock | null,
+    coverClock: TimeClock | null,
+    leave: LeaveRecord | null
+  ) {
+    const alerts: { label: string; kind: "red" | "yellow" | "blue" | "gray" | "purple" }[] = [];
+
+    if (leave) {
+      const leaveType = getLeaveCategory(leave.reason);
+      alerts.push({
+        label: leaveType === "ANNUAL_LEAVE" ? "ANNUAL LEAVE" : "SICK LEAVE",
+        kind: "purple",
+      });
+    }
+
+    if (isVictoriaPublicHolidayISO(shift.shift_start)) {
+      alerts.push({ label: "PUBLIC HOLIDAY", kind: "yellow" });
+    }
 
     if (!clock) {
       if (coverClock) {
@@ -688,19 +875,6 @@ export default function ClockAdjustmentPage() {
       }
     }
 
-    if (clock.adjusted_clock_in_at && clock.adjusted_clock_out_at) {
-      const inDate = new Date(clock.adjusted_clock_in_at);
-      const outDate = new Date(clock.adjusted_clock_out_at);
-
-      if (
-        inDate.getFullYear() !== outDate.getFullYear() ||
-        inDate.getMonth() !== outDate.getMonth() ||
-        inDate.getDate() !== outDate.getDate()
-      ) {
-        alerts.push({ label: "ADJUSTED CROSSES MIDNIGHT", kind: "blue" });
-      }
-    }
-
     return alerts;
   }
 
@@ -713,31 +887,34 @@ export default function ClockAdjustmentPage() {
     return filteredShifts.map((shift) => {
       const clock = findClockForShift(shift);
       const coverClock = !clock ? findCoverClockForShift(shift) : null;
-      const payroll = getPayrollMinutes(shift, clock);
-      const alerts = getAlerts(shift, clock, coverClock);
-
-      const dayType = getDayTypeByISO(shift.shift_start);
-      const rate = shift.hourly_rate ?? null;
+      const leave = findLeaveForShift(shift);
+      const payroll = getPayrollResult(shift, clock, leave);
+      const alerts = getAlerts(shift, clock, coverClock, leave);
       const status = normalizeShiftStatus(shift.shift_status);
 
-      const payrollHours = payroll.payrollWorkMin !== null ? round2(payroll.payrollWorkMin / 60) : null;
-      const pay = payrollHours !== null && rate !== null ? round2(payrollHours * Number(rate)) : null;
-
-      return { shift, clock, coverClock, payroll, dayType, rate, status, payrollHours, pay, alerts };
+      return {
+        shift,
+        clock,
+        coverClock,
+        leave,
+        payroll,
+        status,
+        alerts,
+      };
     });
-  }, [filteredShifts, clocks]);
+  }, [filteredShifts, clocks, leaveRows, weekdayRateByStaff]);
 
   const overallSummary = useMemo(() => {
-    let totalMin = 0;
+    let totalHours = 0;
     let totalPay = 0;
 
     for (const r of rows) {
-      if (r.payroll.payrollWorkMin !== null) totalMin += r.payroll.payrollWorkMin;
-      if (r.pay !== null) totalPay += r.pay;
+      totalHours += Number(r.payroll.hours ?? 0);
+      totalPay += Number(r.payroll.pay ?? 0);
     }
 
     return {
-      totalHours: round2(totalMin / 60),
+      totalHours: round2(totalHours),
       totalPay: round2(totalPay),
     };
   }, [rows]);
@@ -745,7 +922,10 @@ export default function ClockAdjustmentPage() {
   const staffOptions = useMemo(() => {
     const list = profiles
       .filter((p) => p?.id && (p.is_active === undefined || p.is_active === null || p.is_active === true))
-      .map((p) => ({ id: p.id, name: p.full_name ?? p.id }));
+      .map((p) => ({
+        id: p.id,
+        name: (p.preferred_name ?? "").trim() || (p.full_name ?? "").trim() || p.id,
+      }));
 
     list.sort((a, b) => a.name.localeCompare(b.name));
     return list;
@@ -879,7 +1059,7 @@ export default function ClockAdjustmentPage() {
               />
             </div>
 
-            <div style={{ minWidth: 240 }}>
+            <div style={{ minWidth: 150 }}>
               <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Staff</div>
               <select
                 value={selectedStaffId}
@@ -940,7 +1120,7 @@ export default function ClockAdjustmentPage() {
           <div style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Summary</h2>
             <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Payroll time rule: <b>Status</b> → <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
+              Payroll time rule: <b>Leave / Holiday / Status</b> → <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
             </div>
           </div>
 
@@ -968,7 +1148,6 @@ export default function ClockAdjustmentPage() {
           </div>
 
           <div
-            ref={tableScrollRef}
             style={{
               overflowX: "auto",
               border: `1px solid ${BORDER}`,
@@ -986,12 +1165,12 @@ export default function ClockAdjustmentPage() {
             >
               <thead>
                 <tr>
-                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Payroll", "Alert", "Actions"].map((head) => (
+                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Hour", "Alert", "Actions"].map((head) => (
                     <th
                       key={head}
                       style={{
                         textAlign: "left",
-                        padding: "10px 8px",
+                        padding: "8px 8px",
                         borderBottom: `1px solid ${BORDER}`,
                         color: MUTED,
                         fontSize: 12,
@@ -1012,157 +1191,138 @@ export default function ClockAdjustmentPage() {
                 {rows.map((r) => {
                   const shift = r.shift;
                   const clock = r.clock;
-                  const hasClock = !!clock;
-                  const clockId = clock?.id ?? -1;
+                  const clockId = clock?.id ?? null;
+                  const hasClock = !!clockId;
 
-                  const adjustedInValue = clockId !== -1 && editIn[clockId] !== undefined ? editIn[clockId] : "";
-                  const adjustedOutValue = clockId !== -1 && editOut[clockId] !== undefined ? editOut[clockId] : "";
-                  const reasonValue =
-                    clockId !== -1 && editReason[clockId] !== undefined ? editReason[clockId] : clock?.adjusted_reason ?? "";
-
-                  const hoursText = r.payrollHours === null ? "-" : `${r.payrollHours.toFixed(2)}h`;
-
-                  const dayBadge =
-                    r.dayType === "WEEKDAY"
-                      ? badge("Weekday", { kind: "blue" })
-                      : r.dayType === "SATURDAY"
-                      ? badge("Saturday", { kind: "yellow" })
-                      : badge("Sunday", { kind: "red" });
+                  const adjustedInValue = clock
+                    ? editIn[clockId!] ?? toLocalInputValue(clock.adjusted_clock_in_at ?? clock.clock_in_at)
+                    : "";
+                  const adjustedOutValue = clock
+                    ? editOut[clockId!] ?? toLocalInputValue(clock.adjusted_clock_out_at ?? clock.clock_out_at)
+                    : "";
 
                   const sourceBadge =
                     r.payroll.source === "ADJUSTED"
-                      ? badge("ADJUSTED", { kind: "green" })
+                      ? badge("ADJUSTED", { kind: "blue" })
                       : r.payroll.source === "RAW"
-                      ? badge("RAW", { kind: "blue" })
+                      ? badge("RAW", { kind: "green" })
                       : r.payroll.source === "ROSTER"
-                      ? badge("ROSTER", { kind: "yellow" })
-                      : r.payroll.source === "ABSENT"
-                      ? badge("ABSENT", { kind: "red" })
-                      : r.payroll.source === "SICK"
-                      ? badge("SICK", { kind: "blue" })
-                      : r.payroll.source === "CANCELLED"
-                      ? badge("CANCELLED", { kind: "gray" })
-                      : r.payroll.source === "COVERED"
-                      ? badge("COVERED", { kind: "yellow" })
-                      : badge("NONE", { kind: "gray" });
+                      ? badge("ROSTER", { kind: "gray" })
+                      : r.payroll.source === "LEAVE"
+                      ? badge("LEAVE", { kind: "purple" })
+                      : r.payroll.source === "STATUS"
+                      ? badge("STATUS", { kind: "purple" })
+                      : badge(r.payroll.source, { kind: "gray" });
 
                   return (
                     <tr
                       key={shift.id}
                       style={{
-                        background: getRowBackground(r.alerts, r.status),
-                        boxShadow:
-                          r.status === "ABSENT"
-                            ? "inset 4px 0 0 #DC2626"
-                            : r.status === "SICK"
-                            ? "inset 4px 0 0 #2563EB"
-                            : r.status === "COVERED"
-                            ? "inset 4px 0 0 #D97706"
-                            : r.alerts.some((a) => a.label === "OPEN CLOCK")
-                            ? "inset 4px 0 0 #DC2626"
-                            : r.alerts.some((a) => a.label === "CROSSES MIDNIGHT" || a.label === "LONG SHIFT")
-                            ? "inset 4px 0 0 #D97706"
-                            : r.alerts.some((a) => a.label === "POSSIBLE COVER SHIFT")
-                            ? "inset 4px 0 0 #2563EB"
-                            : "none",
+                        background: getRowBackground(r.alerts, shift.shift_status),
                       }}
                     >
                       <td
                         style={{
-                          padding: "10px 8px",
+                          padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 90,
+                          minWidth: 50,
                         }}
                       >
-                        <div style={{ fontWeight: 800, color: TEXT }}>{staffLabel(shift.staff_id)}</div>
-                      </td>
-
-                      <td
-                        style={{
-                          padding: "10px 8px",
-                          borderBottom: `1px solid ${BORDER}`,
-                          verticalAlign: "top",
-                          minWidth: 100,
-                        }}
-                      >
-                        <div style={{ marginBottom: 8 }}>{dayBadge}</div>
-                        <div style={{ color: TEXT, fontWeight: 700 }}>{fmtAU(shift.shift_start)}</div>
-                        <div style={{ color: MUTED, marginTop: 6 }}>{fmtAU(shift.shift_end)}</div>
-                      </td>
-
-                      <td
-                        style={{
-                          padding: "10px 8px",
-                          borderBottom: `1px solid ${BORDER}`,
-                          verticalAlign: "top",
-                          minWidth: 60,
-                        }}
-                      >
-                        <div style={{ marginBottom: 8 }}>{statusBadge(r.status)}</div>
-
-                        {shift.shift_status_note ? (
-                          <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4 }}>
-                            Note: {shift.shift_status_note}
-                          </div>
-                        ) : null}
-                      </td>
-
-                      <td
-                        style={{
-                          padding: "10px 8px",
-                          borderBottom: `1px solid ${BORDER}`,
-                          verticalAlign: "top",
-                          minWidth: 100,
-                        }}
-                      >
-                        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>In</div>
-                        <div style={{ color: TEXT, fontWeight: 700, marginBottom: 10 }}>
-                          {fmtAU(clock?.clock_in_at ?? null)}
+                        <div style={{ fontWeight: 700, color: TEXT }}>{staffLabel(shift.staff_id)}</div>
+                        <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
+                          {payClassLabel(r.payroll.payClass)}
                         </div>
-
-                        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Out</div>
-                        <div style={{ color: TEXT }}>{fmtAU(clock?.clock_out_at ?? null)}</div>
                       </td>
 
                       <td
                         style={{
-                          padding: "10px 8px",
+                          padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 160,
+                          minWidth: 140,
+                        }}
+                      >
+                        <div style={{ fontWeight: 500, color: TEXT }}>{fmtAU(shift.shift_start)}</div>
+                        <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>To</div>
+                        <div style={{ fontWeight: 500, color: TEXT, marginTop: 6 }}>{fmtAU(shift.shift_end)}</div>
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "8px 8px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          verticalAlign: "top",
+                          minWidth: 110,
+                        }}
+                      >
+                        <div style={{ marginBottom: 8 }}>{statusBadge(shift.shift_status)}</div>
+
+                        <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Change</div>
+                        <select
+                          value={normalizeShiftStatus(shift.shift_status)}
+                          onChange={(e) => updateShiftStatus(shift.id, e.target.value as ShiftStatus)}
+                          disabled={loading}
+                          style={inputStyle("100%")}
+                        >
+                          <option value="SCHEDULED">Scheduled</option>
+                          <option value="WORKED">Worked</option>
+                          <option value="ABSENT">Absent</option>
+                          <option value="SICK">Sick</option>
+                          <option value="COVERED">Covered</option>
+                          <option value="CANCELLED">Cancelled</option>
+                        </select>
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "8px 8px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          verticalAlign: "top",
+                          minWidth: 150,
+                        }}
+                      >
+                        {!clock ? (
+                          <div style={{ color: MUTED, fontSize: 12 }}>No matched clock</div>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>In</div>
+                            <div style={{ color: TEXT, fontWeight: 500 }}>{fmtAU(clock.clock_in_at)}</div>
+                            <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>Out</div>
+                            <div style={{ color: TEXT, fontWeight: 500, marginTop: 6 }}>{fmtAU(clock.clock_out_at)}</div>
+
+                          </>
+                        )}
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "8px 8px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          verticalAlign: "top",
+                          minWidth: 190,
                         }}
                       >
                         {!hasClock ? (
-                          <div style={{ color: "#9CA3AF", fontSize: 13 }}>No clock record</div>
+                          <div style={{ color: MUTED, fontSize: 12 }}>Create a manual clock first if needed.</div>
                         ) : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                             <div>
-                              <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Adjusted In</div>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Adjusted In</div>
                               <input
                                 type="datetime-local"
-                                value={adjustedInValue || toLocalInputValue(clock?.adjusted_clock_in_at)}
-                                onChange={(e) => setEditIn((p) => ({ ...p, [clockId]: e.target.value }))}
+                                value={adjustedInValue}
+                                onChange={(e) => setEditIn((p) => ({ ...p, [clockId!]: e.target.value }))}
                                 style={inputStyle("100%")}
                               />
                             </div>
 
                             <div>
-                              <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Adjusted Out</div>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Adjusted Out</div>
                               <input
                                 type="datetime-local"
-                                value={adjustedOutValue || toLocalInputValue(clock?.adjusted_clock_out_at)}
-                                onChange={(e) => setEditOut((p) => ({ ...p, [clockId]: e.target.value }))}
-                                style={inputStyle("100%")}
-                              />
-                            </div>
-
-                            <div>
-                              <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Reason (optional)</div>
-                              <input
-                                placeholder="Optional note"
-                                value={reasonValue}
-                                onChange={(e) => setEditReason((p) => ({ ...p, [clockId]: e.target.value }))}
+                                value={adjustedOutValue}
+                                onChange={(e) => setEditOut((p) => ({ ...p, [clockId!]: e.target.value }))}
                                 style={inputStyle("100%")}
                               />
                             </div>
@@ -1172,58 +1332,48 @@ export default function ClockAdjustmentPage() {
 
                       <td
                         style={{
-                          padding: "10px 8px",
+                          padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
                           minWidth: 90,
                         }}
                       >
-                        <div style={{ marginBottom: 10 }}>{sourceBadge}</div>
+                        <div style={{ marginBottom: 8 }}>{sourceBadge}</div>
 
-                        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Hours</div>
-                        <div style={{ fontWeight: 800, color: TEXT, marginBottom: 10 }}>{hoursText}</div>
-
-                        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Rate</div>
-                        <div style={{ color: TEXT, marginBottom: 10 }}>
-                          {r.rate === null ? "-" : money(r.rate)}
-                        </div>
-
-                        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Pay</div>
-                        <div style={{ fontWeight: 800, color: TEXT }}>
-                          {money(r.pay)}
-                        </div>
+                        <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Hours</div>
+                        <div style={{ fontWeight: 800, color: TEXT }}>{r.payroll.hours.toFixed(2)}h</div>
                       </td>
 
                       <td
                         style={{
-                          padding: "10px 8px",
+                          padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
-                          minWidth: 90,
+                          minWidth: 120,
                         }}
                       >
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           {r.alerts.length === 0 ? (
                             badge("OK", { kind: "green" })
                           ) : (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            <>
                               {r.alerts.map((a, idx) => (
                                 <div key={idx}>{badge(a.label, { kind: a.kind })}</div>
                               ))}
 
                               {r.coverClock && (
-                                <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4 }}>
+                                <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
                                   Clock nearby: <b style={{ color: TEXT }}>{staffLabel(r.coverClock.staff_id)}</b>
                                 </div>
                               )}
-                            </div>
+                            </>
                           )}
                         </div>
                       </td>
 
                       <td
                         style={{
-                          padding: "10px 8px",
+                          padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
                           verticalAlign: "top",
                           minWidth: 150,
@@ -1231,29 +1381,22 @@ export default function ClockAdjustmentPage() {
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           {!hasClock ? (
-                            actionButton("Create clock", () => createClockForShift(shift), {
+                            actionButton("Create Clock", () => createClockForShift(shift), {
                               disabled: loading,
                             })
                           ) : (
-                            <>
-                              {actionButton("Set to roster", () => setToRoster(clockId, shift), {
-                                disabled: loading,
-                              })}
-                              {actionButton("Save", () => saveAdjustment(clockId), {
-                                primary: true,
-                                disabled: loading,
-                              })}
-                            </>
+                            actionButton("Save Time", () => saveAdjustment(clockId!), {
+                              primary: true,
+                              disabled: loading,
+                            })
                           )}
 
-                          {actionButton("Absent", () => updateShiftStatus(shift.id, "ABSENT"), {
+                          {actionButton("Set to roster", () => setToRoster(clockId!, shift), {
+                            disabled: loading || !hasClock,
+                          })}
+
+                          {actionButton("Delete shift", () => deleteShift(shift.id), {
                             danger: true,
-                            disabled: loading,
-                          })}
-                          {actionButton("Sick", () => updateShiftStatus(shift.id, "SICK"), {
-                            disabled: loading,
-                          })}
-                          {actionButton("Restore", () => restoreShiftToNormal(shift.id), {
                             disabled: loading,
                           })}
                         </div>
@@ -1267,7 +1410,7 @@ export default function ClockAdjustmentPage() {
                     <td
                       colSpan={8}
                       style={{
-                        padding: 16,
+                        padding: 14,
                         color: "#9CA3AF",
                         borderBottom: `1px solid ${BORDER}`,
                       }}
@@ -1281,10 +1424,18 @@ export default function ClockAdjustmentPage() {
           </div>
 
           <div style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
-            Payroll is calculated using each shift’s saved hourly rate.
+            Hours include public holiday, annual leave and sick leave rules where applicable.
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function overlaps(aStartISO: string, aEndISO: string, bStartISO: string, bEndISO: string) {
+  const aStart = new Date(aStartISO).getTime();
+  const aEnd = new Date(aEndISO).getTime();
+  const bStart = new Date(bStartISO).getTime();
+  const bEnd = new Date(bEndISO).getTime();
+  return aStart < bEnd && bStart < aEnd;
 }

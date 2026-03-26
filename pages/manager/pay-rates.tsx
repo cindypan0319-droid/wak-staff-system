@@ -14,6 +14,7 @@ type RateRow = {
   weekday_rate: number;
   saturday_rate: number;
   sunday_rate: number;
+  holiday_rate: number;
 };
 
 const DEFAULT_STORE_ID = "MOOROOLBARK";
@@ -162,7 +163,7 @@ export default function PayRatesPage() {
 
     const r = await supabase
       .from("staff_pay_rates")
-      .select("staff_id, store_id, weekday_rate, saturday_rate, sunday_rate")
+      .select("staff_id, store_id, weekday_rate, saturday_rate, sunday_rate, holiday_rate")
       .eq("store_id", DEFAULT_STORE_ID);
 
     if (r.error) {
@@ -181,6 +182,7 @@ export default function PayRatesPage() {
         weekday_rate: toNum(x.weekday_rate),
         saturday_rate: toNum(x.saturday_rate),
         sunday_rate: toNum(x.sunday_rate),
+        holiday_rate: toNum(x.holiday_rate),
       }))
     );
 
@@ -224,6 +226,7 @@ export default function PayRatesPage() {
             weekday_rate: 0,
             saturday_rate: 0,
             sunday_rate: 0,
+            holiday_rate: 0,
             ...patch,
           } as RateRow,
         ];
@@ -247,6 +250,7 @@ export default function PayRatesPage() {
       weekday_rate: Number(row.weekday_rate),
       saturday_rate: Number(row.saturday_rate),
       sunday_rate: Number(row.sunday_rate),
+      holiday_rate: Number(row.holiday_rate),
       updated_by: viewerId,
       updated_at: new Date().toISOString(),
     };
@@ -270,7 +274,7 @@ export default function PayRatesPage() {
   if (authLoading) {
     return (
       <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto" }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto" }}>
           <div
             style={{
               border: `1px solid ${BORDER}`,
@@ -327,7 +331,7 @@ export default function PayRatesPage() {
 
   return (
     <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
-      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
         <div style={{ marginBottom: 12 }}>
           {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
         </div>
@@ -343,6 +347,9 @@ export default function PayRatesPage() {
           }}
         >
           <h1 style={{ margin: 0, color: TEXT }}>Pay Rates</h1>
+          <div style={{ marginTop: 6, color: MUTED }}>
+            Set weekday, weekend and public holiday hourly rates
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
@@ -437,12 +444,19 @@ export default function PayRatesPage() {
                 width: "100%",
                 borderCollapse: "separate",
                 borderSpacing: 0,
-                minWidth: 860,
+                minWidth: 1040,
               }}
             >
               <thead>
                 <tr>
-                  {["Staff", "Weekday rate", "Saturday rate", "Sunday rate", "Action"].map((head) => (
+                  {[
+                    "Staff",
+                    "Weekday rate",
+                    "Saturday rate",
+                    "Sunday rate",
+                    "Public holiday rate",
+                    "Action",
+                  ].map((head) => (
                     <th
                       key={head}
                       style={{
@@ -469,6 +483,7 @@ export default function PayRatesPage() {
                     weekday_rate: 0,
                     saturday_rate: 0,
                     sunday_rate: 0,
+                    holiday_rate: 0,
                   };
 
                   return (
@@ -491,7 +506,9 @@ export default function PayRatesPage() {
                           step="0.01"
                           min="0"
                           value={r.weekday_rate}
-                          onChange={(e) => setLocalRate(p.id, { weekday_rate: Number(e.target.value) })}
+                          onChange={(e) =>
+                            setLocalRate(p.id, { weekday_rate: Number(e.target.value) })
+                          }
                           style={inputStyle(140)}
                         />
                       </td>
@@ -502,7 +519,9 @@ export default function PayRatesPage() {
                           step="0.01"
                           min="0"
                           value={r.saturday_rate}
-                          onChange={(e) => setLocalRate(p.id, { saturday_rate: Number(e.target.value) })}
+                          onChange={(e) =>
+                            setLocalRate(p.id, { saturday_rate: Number(e.target.value) })
+                          }
                           style={inputStyle(140)}
                         />
                       </td>
@@ -513,8 +532,23 @@ export default function PayRatesPage() {
                           step="0.01"
                           min="0"
                           value={r.sunday_rate}
-                          onChange={(e) => setLocalRate(p.id, { sunday_rate: Number(e.target.value) })}
+                          onChange={(e) =>
+                            setLocalRate(p.id, { sunday_rate: Number(e.target.value) })
+                          }
                           style={inputStyle(140)}
+                        />
+                      </td>
+
+                      <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={r.holiday_rate}
+                          onChange={(e) =>
+                            setLocalRate(p.id, { holiday_rate: Number(e.target.value) })
+                          }
+                          style={inputStyle(160)}
                         />
                       </td>
 
