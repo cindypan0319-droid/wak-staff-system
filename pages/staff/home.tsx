@@ -442,8 +442,8 @@ export default function StaffHomePage() {
               }}
             >
               <CardButton
-                title="Roster & Time Clock Adjustment"
-                desc="Adjust and calculate pay"
+                title="Clock Adjustment"
+                desc="Adjust shifts"
                 href="/manager/clock-adjustment"
               />
 

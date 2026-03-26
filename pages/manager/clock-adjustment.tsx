@@ -13,6 +13,7 @@ type ShiftStatus =
 
 type Shift = {
   id: number;
+  store_id?: string | null;
   staff_id: string;
   shift_start: string;
   shift_end: string;
@@ -72,11 +73,14 @@ type PayClass =
   | "CANCELLED"
   | "COVERED";
 
+const STORE_ID = "MOOROOLBARK";
+
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
 const WAK_BG = "#F5F6F8";
 const CARD_BG = "#FFFFFF";
 const BORDER = "#E5E7EB";
+const GRID = "#F1F3F5";
 const TEXT = "#111827";
 const MUTED = "#6B7280";
 
@@ -153,6 +157,13 @@ function toLocalInputValue(iso: string | null | undefined) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
     d.getMinutes()
   )}`;
+}
+
+function buildISOFromDateAndTime(dateISO: string, hhmm: string) {
+  const [hh, mm] = (hhmm || "00:00").split(":").map((x) => Number(x));
+  const d = new Date(`${dateISO}T00:00:00`);
+  d.setHours(hh, mm, 0, 0);
+  return d.toISOString();
 }
 
 function easterSunday(year: number) {
@@ -245,8 +256,23 @@ function normalizeShiftStatus(v: any): ShiftStatus {
   return "SCHEDULED";
 }
 
+function overlaps(aStartISO: string, aEndISO: string, bStartISO: string, bEndISO: string) {
+  const aStart = new Date(aStartISO).getTime();
+  const aEnd = new Date(aEndISO).getTime();
+  const bStart = new Date(bStartISO).getTime();
+  const bEnd = new Date(bEndISO).getTime();
+  return aStart < bEnd && bStart < aEnd;
+}
+
 function isNoPayStatus(status: ShiftStatus | null | undefined) {
-  return status === "ABSENT" || status === "CANCELLED" || status === "COVERED";
+  return status === "ABSENT" || status === "SICK" || status === "CANCELLED" || status === "COVERED";
+}
+
+function getLeaveCategory(reason: string | null): "ANNUAL_LEAVE" | "SICK_LEAVE" | null {
+  const text = (reason ?? "").toLowerCase();
+  if (text.includes("annual leave")) return "ANNUAL_LEAVE";
+  if (text.includes("sick leave")) return "SICK_LEAVE";
+  return null;
 }
 
 function actionButton(
@@ -310,7 +336,7 @@ function infoCard(label: string, value: string, color?: string) {
         borderRadius: 10,
         background: "#F9FAFB",
         border: `1px solid ${BORDER}`,
-        minWidth: 100,
+        minWidth: 80,
       }}
     >
       <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
@@ -396,13 +422,6 @@ function getRowBackground(
   return "#FFFFFF";
 }
 
-function getLeaveCategory(reason: string | null): "ANNUAL_LEAVE" | "SICK_LEAVE" | null {
-  const text = (reason ?? "").toLowerCase();
-  if (text.includes("annual leave")) return "ANNUAL_LEAVE";
-  if (text.includes("sick leave")) return "SICK_LEAVE";
-  return null;
-}
-
 function payClassLabel(c: PayClass) {
   if (c === "PUBLIC_HOLIDAY") return "Public Holiday";
   if (c === "ANNUAL_LEAVE") return "Annual Leave";
@@ -437,6 +456,12 @@ export default function ClockAdjustmentPage() {
 
   const [editIn, setEditIn] = useState<Record<number, string>>({});
   const [editOut, setEditOut] = useState<Record<number, string>>({});
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createStaffId, setCreateStaffId] = useState<string>("");
+  const [createDate, setCreateDate] = useState<string>(todayDateInputValue());
+  const [createStartTime, setCreateStartTime] = useState<string>("17:00");
+  const [createEndTime, setCreateEndTime] = useState<string>("21:00");
 
   async function loadPermission() {
     setAuthLoading(true);
@@ -506,6 +531,7 @@ export default function ClockAdjustmentPage() {
         supabase
           .from("shifts")
           .select("*")
+          .eq("store_id", STORE_ID)
           .gte("shift_start", startISO)
           .lt("shift_start", endISO)
           .order("shift_start", { ascending: true })
@@ -521,11 +547,15 @@ export default function ClockAdjustmentPage() {
 
         supabase.from("profiles").select("*").order("full_name", { ascending: true }),
 
-        supabase.from("staff_pay_rates").select("staff_id, weekday_rate, saturday_rate, sunday_rate, holiday_rate"),
+        supabase
+          .from("staff_pay_rates")
+          .select("staff_id, weekday_rate, saturday_rate, sunday_rate, holiday_rate")
+          .eq("store_id", STORE_ID),
 
         supabase
           .from("staff_unavailability")
           .select("id, staff_id, start_at, end_at, reason")
+          .eq("store_id", STORE_ID)
           .lt("start_at", endISO)
           .gt("end_at", startISO)
           .order("start_at", { ascending: true }),
@@ -620,6 +650,22 @@ export default function ClockAdjustmentPage() {
 
     if (matches.length === 0) return null;
     return matches[0];
+  }
+
+  async function getHourlyRateForShift(staffId: string, shiftStartISO: string): Promise<number> {
+    const row = payRates.find((r) => r.staff_id === staffId);
+    if (!row) {
+      throw new Error("Could not find pay rate for this staff member.");
+    }
+
+    if (isVictoriaPublicHolidayISO(shiftStartISO)) {
+      return Number(row.holiday_rate ?? 0);
+    }
+
+    const day = new Date(shiftStartISO).getDay();
+    if (day === 6) return Number(row.saturday_rate ?? 0);
+    if (day === 0) return Number(row.sunday_rate ?? 0);
+    return Number(row.weekday_rate ?? 0);
   }
 
   async function createClockForShift(shift: Shift) {
@@ -752,6 +798,62 @@ export default function ClockAdjustmentPage() {
     setEditOut((p) => ({ ...p, [clockId]: toLocal(outVal) }));
   }
 
+  async function createShiftNow() {
+    setLoading(true);
+    setMsg("");
+
+    try {
+      if (!createStaffId) {
+        setMsg("Please select staff.");
+        return;
+      }
+      if (!createDate || !createStartTime || !createEndTime) {
+        setMsg("Please fill date, start and end time.");
+        return;
+      }
+
+      const startISO = buildISOFromDateAndTime(createDate, createStartTime);
+      let endISO = buildISOFromDateAndTime(createDate, createEndTime);
+
+      if (new Date(endISO).getTime() <= new Date(startISO).getTime()) {
+        const end = new Date(endISO);
+        end.setDate(end.getDate() + 1);
+        endISO = end.toISOString();
+      }
+
+      const hourlyRate = await getHourlyRateForShift(createStaffId, startISO);
+
+      const payload: any = {
+        store_id: STORE_ID,
+        staff_id: createStaffId,
+        shift_start: startISO,
+        shift_end: endISO,
+        break_minutes: 0,
+        hourly_rate: hourlyRate,
+        shift_status: "SCHEDULED",
+        created_by: viewerId,
+      };
+
+      const { error } = await supabase.from("shifts").insert(payload);
+      if (error) {
+        setMsg("Create shift failed: " + error.message);
+        return;
+      }
+
+      setMsg("Shift created.");
+      setCreateOpen(false);
+      setCreateStaffId("");
+      setCreateDate(todayDateInputValue());
+      setCreateStartTime("17:00");
+      setCreateEndTime("21:00");
+      await fetchData();
+    } catch (e: any) {
+      setMsg("Create shift failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function getPayrollResult(shift: Shift, clock: TimeClock | null, leave: LeaveRecord | null) {
     const status = normalizeShiftStatus(shift.shift_status);
     const breakMin = shift.break_minutes ?? 0;
@@ -781,13 +883,11 @@ export default function ClockAdjustmentPage() {
     }
 
     if (status === "SICK") {
-      const rate = Number(weekdayRateByStaff[shift.staff_id] ?? 0);
-      const hours = round2(rosterWorkMin / 60);
       return {
         payClass: "SICK_LEAVE" as PayClass,
         source: "STATUS",
-        hours,
-        pay: round2(hours * rate),
+        hours: 0,
+        pay: 0,
       };
     }
 
@@ -924,7 +1024,7 @@ export default function ClockAdjustmentPage() {
       .filter((p) => p?.id && (p.is_active === undefined || p.is_active === null || p.is_active === true))
       .map((p) => ({
         id: p.id,
-        name: (p.preferred_name ?? "").trim() || (p.full_name ?? "").trim() || p.id,
+        name: ((p.preferred_name ?? "").trim() || (p.full_name ?? "").trim() || p.id) as string,
       }));
 
     list.sort((a, b) => a.name.localeCompare(b.name));
@@ -956,10 +1056,6 @@ export default function ClockAdjustmentPage() {
     return (
       <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
         <div style={{ maxWidth: 980, margin: "0 auto" }}>
-          <div style={{ marginBottom: 12 }}>
-            {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
-          </div>
-
           <div
             style={{
               border: `1px solid ${BORDER}`,
@@ -969,7 +1065,21 @@ export default function ClockAdjustmentPage() {
               boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
             }}
           >
-            <h1 style={{ marginTop: 0, color: TEXT }}>Roster & Time Clock Adjustment</h1>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 16,
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <h1 style={{ marginTop: 0, color: TEXT }}>Roster & Time Clock Adjustment</h1>
+              </div>
+              <div>{actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}</div>
+            </div>
+
             <div
               style={{
                 padding: 14,
@@ -977,6 +1087,7 @@ export default function ClockAdjustmentPage() {
                 borderRadius: 12,
                 background: "#fff",
                 color: TEXT,
+                marginTop: 8,
               }}
             >
               <b>Access denied.</b> This page is only for <b>Owner / Manager</b>.
@@ -992,10 +1103,6 @@ export default function ClockAdjustmentPage() {
   return (
     <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
       <div style={{ maxWidth: 1180, margin: "0 auto" }}>
-        <div style={{ marginBottom: 12 }}>
-          {actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}
-        </div>
-
         <div
           style={{
             border: `1px solid ${BORDER}`,
@@ -1006,9 +1113,23 @@ export default function ClockAdjustmentPage() {
             boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
           }}
         >
-          <h1 style={{ margin: 0, color: TEXT }}>Roster & Time Clock Adjustment</h1>
-          <div style={{ marginTop: 6, color: MUTED }}>
-            Review roster, raw clock records, adjustments and payroll hours
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <h1 style={{ margin: 0, color: TEXT }}>Roster & Time Clock Adjustment</h1>
+              <div style={{ marginTop: 6, color: MUTED }}>
+                Review roster, raw clock records, adjustments and payroll hours
+              </div>
+            </div>
+
+            <div>{actionButton("← Back to Home", () => (window.location.href = "/staff/home"))}</div>
           </div>
         </div>
 
@@ -1022,11 +1143,24 @@ export default function ClockAdjustmentPage() {
             boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
           }}
         >
-          <div style={{ marginBottom: 14 }}>
-            <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Filters</h2>
-            <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Select a date range and optional staff filter, then apply.
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 16,
+              flexWrap: "wrap",
+              marginBottom: 14,
+            }}
+          >
+            <div>
+              <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Filters</h2>
+              <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
+                Select a date range and optional staff filter, then apply.
+              </div>
             </div>
+
+            <div>{actionButton("＋ Create Shift", () => setCreateOpen(true), { primary: true, disabled: loading })}</div>
           </div>
 
           <div
@@ -1092,6 +1226,91 @@ export default function ClockAdjustmentPage() {
           </div>
         </div>
 
+        {createOpen && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 18,
+              marginBottom: 16,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <div style={{ marginBottom: 14 }}>
+              <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Create Shift</h2>
+              <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
+                Use this when someone comes in to cover a shift but was not rostered.
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 14, alignItems: "end", flexWrap: "wrap" }}>
+              <div style={{ minWidth: 150 }}>
+                <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Staff</div>
+                <select
+                  value={createStaffId}
+                  onChange={(e) => setCreateStaffId(e.target.value)}
+                  style={inputStyle("100%")}
+                  disabled={loading}
+                >
+                  <option value="">Select staff</option>
+                  {staffOptions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Date</div>
+                <input
+                  type="date"
+                  value={createDate}
+                  onChange={(e) => setCreateDate(e.target.value)}
+                  style={inputStyle(160)}
+                  disabled={loading}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Start</div>
+                <input
+                  type="time"
+                  value={createStartTime}
+                  onChange={(e) => setCreateStartTime(e.target.value)}
+                  style={inputStyle(120)}
+                  disabled={loading}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>End</div>
+                <input
+                  type="time"
+                  value={createEndTime}
+                  onChange={(e) => setCreateEndTime(e.target.value)}
+                  style={inputStyle(120)}
+                  disabled={loading}
+                />
+              </div>
+
+              {actionButton("Save Shift", createShiftNow, { primary: true, disabled: loading })}
+              {actionButton(
+                "Cancel",
+                () => {
+                  setCreateOpen(false);
+                  setCreateStaffId("");
+                  setCreateDate(todayDateInputValue());
+                  setCreateStartTime("17:00");
+                  setCreateEndTime("21:00");
+                },
+                { disabled: loading }
+              )}
+            </div>
+          </div>
+        )}
+
         {msg && (
           <div
             style={{
@@ -1120,7 +1339,7 @@ export default function ClockAdjustmentPage() {
           <div style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Summary</h2>
             <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Payroll time rule: <b>Leave / Holiday / Status</b> → <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
+              Payroll time rule: <b>Status</b> → <b>Leave</b> → <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
             </div>
           </div>
 
@@ -1143,7 +1362,7 @@ export default function ClockAdjustmentPage() {
           <div style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Adjustment Table</h2>
             <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Each row represents one roster shift. Raw clock is matched to that shift.
+              Each row represents one shift. Raw clock is matched to that shift.
             </div>
           </div>
 
@@ -1165,13 +1384,14 @@ export default function ClockAdjustmentPage() {
             >
               <thead>
                 <tr>
-                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Hour", "Alert", "Actions"].map((head) => (
+                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Hour", "Alert", "Actions"].map((head, idx, arr) => (
                     <th
                       key={head}
                       style={{
                         textAlign: "left",
                         padding: "8px 8px",
                         borderBottom: `1px solid ${BORDER}`,
+                        borderRight: idx < arr.length - 1 ? `1px solid ${GRID}` : undefined,
                         color: MUTED,
                         fontSize: 12,
                         background: "#FAFAFA",
@@ -1212,7 +1432,7 @@ export default function ClockAdjustmentPage() {
                       ? badge("LEAVE", { kind: "purple" })
                       : r.payroll.source === "STATUS"
                       ? badge("STATUS", { kind: "purple" })
-                      : badge(r.payroll.source, { kind: "gray" });
+                      : badge(String(r.payroll.source), { kind: "gray" });
 
                   return (
                     <tr
@@ -1225,8 +1445,9 @@ export default function ClockAdjustmentPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 50,
+                          minWidth: 80,
                         }}
                       >
                         <div style={{ fontWeight: 700, color: TEXT }}>{staffLabel(shift.staff_id)}</div>
@@ -1239,19 +1460,21 @@ export default function ClockAdjustmentPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 140,
+                          minWidth: 150,
                         }}
                       >
-                        <div style={{ fontWeight: 500, color: TEXT }}>{fmtAU(shift.shift_start)}</div>
+                        <div style={{ fontWeight: 700, color: TEXT }}>{fmtAU(shift.shift_start)}</div>
                         <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>To</div>
-                        <div style={{ fontWeight: 500, color: TEXT, marginTop: 6 }}>{fmtAU(shift.shift_end)}</div>
+                        <div style={{ fontWeight: 700, color: TEXT, marginTop: 6 }}>{fmtAU(shift.shift_end)}</div>
                       </td>
 
                       <td
                         style={{
                           padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
                           minWidth: 110,
                         }}
@@ -1278,6 +1501,7 @@ export default function ClockAdjustmentPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
                           minWidth: 150,
                         }}
@@ -1286,11 +1510,9 @@ export default function ClockAdjustmentPage() {
                           <div style={{ color: MUTED, fontSize: 12 }}>No matched clock</div>
                         ) : (
                           <>
-                            <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>In</div>
-                            <div style={{ color: TEXT, fontWeight: 500 }}>{fmtAU(clock.clock_in_at)}</div>
+                            <div style={{ color: TEXT, fontWeight: 700 }}>{fmtAU(clock.clock_in_at)}</div>
                             <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>Out</div>
-                            <div style={{ color: TEXT, fontWeight: 500, marginTop: 6 }}>{fmtAU(clock.clock_out_at)}</div>
-
+                            <div style={{ color: TEXT, fontWeight: 700, marginTop: 6 }}>{fmtAU(clock.clock_out_at)}</div>
                           </>
                         )}
                       </td>
@@ -1299,6 +1521,7 @@ export default function ClockAdjustmentPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
                           minWidth: 190,
                         }}
@@ -1334,8 +1557,9 @@ export default function ClockAdjustmentPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 90,
+                          minWidth: 50,
                         }}
                       >
                         <div style={{ marginBottom: 8 }}>{sourceBadge}</div>
@@ -1348,8 +1572,9 @@ export default function ClockAdjustmentPage() {
                         style={{
                           padding: "8px 8px",
                           borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 120,
+                          minWidth: 90,
                         }}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1424,18 +1649,10 @@ export default function ClockAdjustmentPage() {
           </div>
 
           <div style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
-            Hours include public holiday, annual leave and sick leave rules where applicable.
+            Use <b>Create Shift</b> first when someone covers a shift but was not rostered, then create or adjust their clock here.
           </div>
         </div>
       </div>
     </div>
   );
-}
-
-function overlaps(aStartISO: string, aEndISO: string, bStartISO: string, bEndISO: string) {
-  const aStart = new Date(aStartISO).getTime();
-  const aEnd = new Date(aEndISO).getTime();
-  const bStart = new Date(bStartISO).getTime();
-  const bEnd = new Date(bEndISO).getTime();
-  return aStart < bEnd && bStart < aEnd;
 }
