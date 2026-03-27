@@ -584,6 +584,53 @@ export default function ClockAdjustmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, viewerRole]);
 
+    function getClockEffectiveRange(clock: TimeClock) {
+    const startISO = clock.adjusted_clock_in_at ?? clock.clock_in_at;
+    const endISO = clock.adjusted_clock_out_at ?? clock.clock_out_at ?? startISO;
+
+    if (!startISO || !endISO) return null;
+
+    const startMs = new Date(startISO).getTime();
+    const endMs = new Date(endISO).getTime();
+
+    if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
+
+    return {
+      startISO,
+      endISO,
+      startMs,
+      endMs,
+    };
+  }
+
+  function hasOverlappingRosteredShift(staffId: string, targetShift: Shift) {
+    return shifts.some((s) => {
+      if (s.staff_id !== staffId) return false;
+      if (s.id === targetShift.id) return false;
+
+      const status = normalizeShiftStatus(s.shift_status);
+      if (status === "CANCELLED") return false;
+
+      return overlaps(s.shift_start, s.shift_end, targetShift.shift_start, targetShift.shift_end);
+    });
+  }
+
+  function clockOverlapMinutesWithShift(clock: TimeClock, shift: Shift) {
+    const range = getClockEffectiveRange(clock);
+    if (!range) return 0;
+
+    const aStart = new Date(shift.shift_start).getTime();
+    const aEnd = new Date(shift.shift_end).getTime();
+    const bStart = range.startMs;
+    const bEnd = range.endMs;
+
+    const overlapStart = Math.max(aStart, bStart);
+    const overlapEnd = Math.min(aEnd, bEnd);
+
+    if (overlapEnd <= overlapStart) return 0;
+    return Math.round((overlapEnd - overlapStart) / 60000);
+  }
+
   function findClockForShift(shift: Shift) {
     const byId = clocks.find((c) => c.shift_id === shift.id);
     if (byId) return byId;
@@ -613,31 +660,61 @@ export default function ClockAdjustmentPage() {
     return candidates[0];
   }
 
-  function findCoverClockForShift(shift: Shift) {
+    function findCoverClockForShift(shift: Shift) {
     const sStart = new Date(shift.shift_start).getTime();
     const sEnd = new Date(shift.shift_end).getTime();
     if (Number.isNaN(sStart) || Number.isNaN(sEnd)) return null;
 
-    const windowStart = sStart - 3 * 60 * 60 * 1000;
-    const windowEnd = sEnd + 3 * 60 * 60 * 1000;
+    const nearbyWindowStart = sStart - 3 * 60 * 60 * 1000;
+    const nearbyWindowEnd = sEnd + 3 * 60 * 60 * 1000;
 
     const candidates = clocks
       .filter((c) => c.staff_id !== shift.staff_id)
-      .filter((c) => c.clock_in_at)
-      .filter((c) => {
-        const t = new Date(c.clock_in_at as string).getTime();
-        return t >= windowStart && t <= windowEnd;
-      });
+      .filter((c) => !!(c.adjusted_clock_in_at ?? c.clock_in_at))
+      .map((c) => {
+        const range = getClockEffectiveRange(c);
+        if (!range) return null;
+
+        const overlapMin = clockOverlapMinutesWithShift(c, shift);
+        const hasOwnRoster = hasOverlappingRosteredShift(c.staff_id, shift);
+
+        const isNearby =
+          range.startMs >= nearbyWindowStart && range.startMs <= nearbyWindowEnd;
+
+        return {
+          clock: c,
+          overlapMin,
+          hasOwnRoster,
+          isNearby,
+          distanceToShiftStart: Math.abs(range.startMs - sStart),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x);
 
     if (candidates.length === 0) return null;
 
-    candidates.sort((a, b) => {
-      const ta = new Date(a.clock_in_at as string).getTime();
-      const tb = new Date(b.clock_in_at as string).getTime();
-      return Math.abs(ta - sStart) - Math.abs(tb - sStart);
-    });
+    // 1) 最优先：有重叠打卡，而且这个人自己没有被排重叠 shift
+    const unrosteredOverlap = candidates
+      .filter((x) => x.overlapMin >= 30 && !x.hasOwnRoster)
+      .sort((a, b) => {
+        if (b.overlapMin !== a.overlapMin) return b.overlapMin - a.overlapMin;
+        return a.distanceToShiftStart - b.distanceToShiftStart;
+      });
 
-    return candidates[0];
+    if (unrosteredOverlap.length > 0) {
+      return unrosteredOverlap[0].clock;
+    }
+
+    // 2) 次优先：附近打卡，但也没有自己的重叠 shift
+    const unrosteredNearby = candidates
+      .filter((x) => x.isNearby && !x.hasOwnRoster)
+      .sort((a, b) => a.distanceToShiftStart - b.distanceToShiftStart);
+
+    if (unrosteredNearby.length > 0) {
+      return unrosteredNearby[0].clock;
+    }
+
+    return null;
   }
 
   function findLeaveForShift(shift: Shift) {
@@ -1588,7 +1665,7 @@ export default function ClockAdjustmentPage() {
 
                               {r.coverClock && (
                                 <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
-                                  Clock nearby: <b style={{ color: TEXT }}>{staffLabel(r.coverClock.staff_id)}</b>
+                                  Unrostered clock: <b style={{ color: TEXT }}>{staffLabel(r.coverClock.staff_id)}</b>
                                 </div>
                               )}
                             </>
