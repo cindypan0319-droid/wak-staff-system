@@ -1050,13 +1050,7 @@ export default function DailyEntryPage() {
             color: TEXT,
           }}
         >
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>
-            {isStoreDevice ? "Store device access confirmed" : "Read only outside store device/network"}
-          </div>
-          <div style={{ fontSize: 13, color: MUTED }}>
-            Auto-save is enabled. Changes are saved after about 2.5 seconds of no typing.
-            {detectedIp ? ` Current IP: ${detectedIp}` : ""}
-          </div>
+
         </div>
 
         {msg && (
