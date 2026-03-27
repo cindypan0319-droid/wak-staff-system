@@ -23,6 +23,9 @@ type Shift = {
   shift_status_note?: string | null;
   shift_status_updated_by?: string | null;
   shift_status_updated_at?: string | null;
+  covered_by_staff_id?: string | null;
+  parent_shift_id?: number | null;
+  cover_note?: string | null;
 };
 
 type TimeClock = {
@@ -134,6 +137,22 @@ function buildRange(fromDate: string, toDate: string): Range {
   const startISO = new Date(`${fromDate}T00:00:00`).toISOString();
   const endISO = addDays(toDate, 1);
   return { startISO, endISO };
+}
+
+function localDateISOFromAny(iso?: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function isClockInsideSelectedLocalDates(clock: TimeClock, fromDate: string, toDate: string) {
+  const basis = clock.clock_in_at ?? clock.adjusted_clock_in_at ?? null;
+  if (!basis) return false;
+  const localISO = localDateISOFromAny(basis);
+  return localISO >= fromDate && localISO <= toDate;
 }
 
 function todayDateInputValue() {
@@ -463,6 +482,9 @@ export default function ClockAdjustmentPage() {
   const [createStartTime, setCreateStartTime] = useState<string>("17:00");
   const [createEndTime, setCreateEndTime] = useState<string>("21:00");
 
+  const [coverStaffByShift, setCoverStaffByShift] = useState<Record<number, string>>({});
+  const [coverNoteByShift, setCoverNoteByShift] = useState<Record<number, string>>({});
+
   async function loadPermission() {
     setAuthLoading(true);
     const { data } = await supabase.auth.getUser();
@@ -584,53 +606,6 @@ export default function ClockAdjustmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, viewerRole]);
 
-    function getClockEffectiveRange(clock: TimeClock) {
-    const startISO = clock.adjusted_clock_in_at ?? clock.clock_in_at;
-    const endISO = clock.adjusted_clock_out_at ?? clock.clock_out_at ?? startISO;
-
-    if (!startISO || !endISO) return null;
-
-    const startMs = new Date(startISO).getTime();
-    const endMs = new Date(endISO).getTime();
-
-    if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
-
-    return {
-      startISO,
-      endISO,
-      startMs,
-      endMs,
-    };
-  }
-
-  function hasOverlappingRosteredShift(staffId: string, targetShift: Shift) {
-    return shifts.some((s) => {
-      if (s.staff_id !== staffId) return false;
-      if (s.id === targetShift.id) return false;
-
-      const status = normalizeShiftStatus(s.shift_status);
-      if (status === "CANCELLED") return false;
-
-      return overlaps(s.shift_start, s.shift_end, targetShift.shift_start, targetShift.shift_end);
-    });
-  }
-
-  function clockOverlapMinutesWithShift(clock: TimeClock, shift: Shift) {
-    const range = getClockEffectiveRange(clock);
-    if (!range) return 0;
-
-    const aStart = new Date(shift.shift_start).getTime();
-    const aEnd = new Date(shift.shift_end).getTime();
-    const bStart = range.startMs;
-    const bEnd = range.endMs;
-
-    const overlapStart = Math.max(aStart, bStart);
-    const overlapEnd = Math.min(aEnd, bEnd);
-
-    if (overlapEnd <= overlapStart) return 0;
-    return Math.round((overlapEnd - overlapStart) / 60000);
-  }
-
   function findClockForShift(shift: Shift) {
     const byId = clocks.find((c) => c.shift_id === shift.id);
     if (byId) return byId;
@@ -660,7 +635,58 @@ export default function ClockAdjustmentPage() {
     return candidates[0];
   }
 
-    function findCoverClockForShift(shift: Shift) {
+  function getClockEffectiveRange(clock: TimeClock) {
+    const startISO = clock.adjusted_clock_in_at ?? clock.clock_in_at;
+    const endISO = clock.adjusted_clock_out_at ?? clock.clock_out_at ?? startISO;
+
+    if (!startISO || !endISO) return null;
+
+    const startMs = new Date(startISO).getTime();
+    const endMs = new Date(endISO).getTime();
+
+    if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
+
+    return {
+      startISO,
+      endISO,
+      startMs,
+      endMs,
+    };
+  }
+
+  function clockOverlapMinutesWithShift(clock: TimeClock, shift: Shift) {
+    const range = getClockEffectiveRange(clock);
+    if (!range) return 0;
+
+    const shiftStart = new Date(shift.shift_start).getTime();
+    const shiftEnd = new Date(shift.shift_end).getTime();
+
+    const overlapStart = Math.max(shiftStart, range.startMs);
+    const overlapEnd = Math.min(shiftEnd, range.endMs);
+
+    if (overlapEnd <= overlapStart) return 0;
+
+    return Math.round((overlapEnd - overlapStart) / 60000);
+  }
+
+  function hasOverlappingRosteredShift(staffId: string, targetShift: Shift) {
+    return shifts.some((s) => {
+      if (s.staff_id !== staffId) return false;
+      if (s.id === targetShift.id) return false;
+
+      const status = normalizeShiftStatus(s.shift_status);
+      if (status === "CANCELLED") return false;
+
+      return overlaps(
+        s.shift_start,
+        s.shift_end,
+        targetShift.shift_start,
+        targetShift.shift_end
+      );
+    });
+  }
+
+  function findCoverClockForShift(shift: Shift) {
     const sStart = new Date(shift.shift_start).getTime();
     const sEnd = new Date(shift.shift_end).getTime();
     if (Number.isNaN(sStart) || Number.isNaN(sEnd)) return null;
@@ -668,15 +694,34 @@ export default function ClockAdjustmentPage() {
     const nearbyWindowStart = sStart - 3 * 60 * 60 * 1000;
     const nearbyWindowEnd = sEnd + 3 * 60 * 60 * 1000;
 
+    function candidateHasOwnMatchedShiftClock(staffId: string) {
+      return shifts.some((s) => {
+        if (s.staff_id !== staffId) return false;
+        if (s.id === shift.id) return false;
+
+        const status = normalizeShiftStatus(s.shift_status);
+        if (status === "CANCELLED") return false;
+
+        // 只看和当前缺勤班有重叠的班
+        if (!overlaps(s.shift_start, s.shift_end, shift.shift_start, shift.shift_end)) return false;
+
+        // 关键：如果他自己的班已经能匹配到 clock，就不能再把他当 cover
+        const ownClock = findClockForShift(s);
+        return !!ownClock;
+      });
+    }
+
     const candidates = clocks
       .filter((c) => c.staff_id !== shift.staff_id)
       .filter((c) => !!(c.adjusted_clock_in_at ?? c.clock_in_at))
+      .filter((c) => c.shift_id == null) // 已经直接绑到某个 shift 的 clock，不拿来做 cover
       .map((c) => {
         const range = getClockEffectiveRange(c);
         if (!range) return null;
 
         const overlapMin = clockOverlapMinutesWithShift(c, shift);
         const hasOwnRoster = hasOverlappingRosteredShift(c.staff_id, shift);
+        const hasOwnMatchedClock = candidateHasOwnMatchedShiftClock(c.staff_id);
 
         const isNearby =
           range.startMs >= nearbyWindowStart && range.startMs <= nearbyWindowEnd;
@@ -685,6 +730,7 @@ export default function ClockAdjustmentPage() {
           clock: c,
           overlapMin,
           hasOwnRoster,
+          hasOwnMatchedClock,
           isNearby,
           distanceToShiftStart: Math.abs(range.startMs - sStart),
         };
@@ -693,9 +739,8 @@ export default function ClockAdjustmentPage() {
 
     if (candidates.length === 0) return null;
 
-    // 1) 最优先：有重叠打卡，而且这个人自己没有被排重叠 shift
     const unrosteredOverlap = candidates
-      .filter((x) => x.overlapMin >= 30 && !x.hasOwnRoster)
+      .filter((x) => x.overlapMin >= 30 && !x.hasOwnRoster && !x.hasOwnMatchedClock)
       .sort((a, b) => {
         if (b.overlapMin !== a.overlapMin) return b.overlapMin - a.overlapMin;
         return a.distanceToShiftStart - b.distanceToShiftStart;
@@ -705,9 +750,8 @@ export default function ClockAdjustmentPage() {
       return unrosteredOverlap[0].clock;
     }
 
-    // 2) 次优先：附近打卡，但也没有自己的重叠 shift
     const unrosteredNearby = candidates
-      .filter((x) => x.isNearby && !x.hasOwnRoster)
+      .filter((x) => x.isNearby && !x.hasOwnRoster && !x.hasOwnMatchedClock)
       .sort((a, b) => a.distanceToShiftStart - b.distanceToShiftStart);
 
     if (unrosteredNearby.length > 0) {
@@ -806,6 +850,34 @@ export default function ClockAdjustmentPage() {
     }
   }
 
+  async function clearAdjustment(clockId: number) {
+    setLoading(true);
+    setMsg("");
+    try {
+      const payload: any = {
+        adjusted_clock_in_at: null,
+        adjusted_clock_out_at: null,
+        adjusted_reason: null,
+        adjusted_by: viewerId,
+        adjusted_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase.from("time_clock").update(payload).eq("id", clockId);
+      if (error) {
+        setMsg("Clear adjustment failed: " + error.message);
+        return;
+      }
+
+      setEditIn((p) => ({ ...p, [clockId]: "" }));
+      setEditOut((p) => ({ ...p, [clockId]: "" }));
+
+      setMsg("Adjustment cleared.");
+      await fetchData();
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function updateShiftStatus(shiftId: number, status: ShiftStatus) {
     setLoading(true);
     setMsg("");
@@ -817,6 +889,12 @@ export default function ClockAdjustmentPage() {
         shift_status_updated_by: viewerId,
         shift_status_updated_at: new Date().toISOString(),
       };
+
+      if (status !== "COVERED") {
+        payload.covered_by_staff_id = null;
+        payload.parent_shift_id = null;
+        payload.cover_note = null;
+      }
 
       const { error } = await supabase.from("shifts").update(payload).eq("id", shiftId);
 
@@ -842,8 +920,15 @@ export default function ClockAdjustmentPage() {
       const linkedClock = clocks.find((c) => c.shift_id === shiftId);
 
       if (linkedClock) {
-        setMsg("Cannot delete this shift because it already has a linked clock record. Use status instead.");
-        return;
+        const unlink = await supabase
+          .from("time_clock")
+          .update({ shift_id: null })
+          .eq("id", linkedClock.id);
+
+        if (unlink.error) {
+          setMsg("Unlink clock failed: " + unlink.error.message);
+          return;
+        }
       }
 
       const { error } = await supabase.from("shifts").delete().eq("id", shiftId);
@@ -931,6 +1016,240 @@ export default function ClockAdjustmentPage() {
     }
   }
 
+
+  function hasOwnRosterOverlap(staffId: string, startISO: string, endISO: string, ignoreShiftId?: number | null) {
+    return shifts.some((s) => {
+      if (s.staff_id !== staffId) return false;
+      if (ignoreShiftId && s.id === ignoreShiftId) return false;
+      const status = normalizeShiftStatus(s.shift_status);
+      if (status === "CANCELLED" || status === "COVERED") return false;
+      return overlaps(s.shift_start, s.shift_end, startISO, endISO);
+    });
+  }
+
+  function getClockRange(clock: TimeClock) {
+    const startISO = clock.adjusted_clock_in_at ?? clock.clock_in_at;
+    const endISO = clock.adjusted_clock_out_at ?? clock.clock_out_at ?? startISO;
+    if (!startISO || !endISO) return null;
+    return { startISO, endISO };
+  }
+
+  function getDefaultCoverStaffId(shift: Shift, coverClock: TimeClock | null) {
+    return (
+      coverStaffByShift[shift.id] ??
+      shift.covered_by_staff_id ??
+      coverClock?.staff_id ??
+      ""
+    );
+  }
+
+  async function createShiftFromClock(
+    clock: TimeClock,
+    options?: {
+      parentShift?: Shift | null;
+      markParentCovered?: boolean;
+      note?: string;
+    }
+  ) {
+    setLoading(true);
+    setMsg("");
+    try {
+      const range = getClockRange(clock);
+      if (!range) {
+        setMsg("Cannot create shift because this clock has no valid time range.");
+        return;
+      }
+
+      if (hasOwnRosterOverlap(clock.staff_id, range.startISO, range.endISO, null)) {
+        setMsg("This staff member already has an overlapping shift in this time range.");
+        return;
+      }
+
+      const hourlyRate = await getHourlyRateForShift(clock.staff_id, range.startISO);
+
+      const insertPayload: any = {
+        store_id: STORE_ID,
+        staff_id: clock.staff_id,
+        shift_start: range.startISO,
+        shift_end: range.endISO,
+        break_minutes: 0,
+        hourly_rate: hourlyRate,
+        shift_status: "SCHEDULED",
+        created_by: viewerId,
+        parent_shift_id: options?.parentShift?.id ?? null,
+      };
+
+      const ins = await supabase.from("shifts").insert(insertPayload).select("id").single();
+      if (ins.error) {
+        setMsg("Create shift failed: " + ins.error.message);
+        return;
+      }
+
+      const newShiftId = (ins.data as any)?.id ?? null;
+
+      if (options?.markParentCovered && options.parentShift) {
+        const up = await supabase
+          .from("shifts")
+          .update({
+            shift_status: "COVERED",
+            covered_by_staff_id: clock.staff_id,
+            cover_note: options?.note ?? null,
+            shift_status_note: null,
+            shift_status_updated_by: viewerId,
+            shift_status_updated_at: new Date().toISOString(),
+          })
+          .eq("id", options.parentShift.id);
+
+        if (up.error) {
+          setMsg("Cover shift was created, but updating original shift failed: " + up.error.message);
+          await fetchData();
+          return;
+        }
+      }
+
+      if (newShiftId) {
+        const clockLink = await supabase.from("time_clock").update({ shift_id: newShiftId }).eq("id", clock.id);
+        if (clockLink.error) {
+          setMsg("Shift created, but linking clock failed: " + clockLink.error.message);
+          await fetchData();
+          return;
+        }
+      }
+
+      setMsg(options?.markParentCovered ? "Cover shift created." : "Shift created from unrostered clock.");
+      await fetchData();
+    } catch (e: any) {
+      setMsg("Create shift failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+    async function createCoverShiftForRow(shift: Shift, suggestedClock?: TimeClock | null) {
+    setLoading(true);
+    setMsg("");
+
+    try {
+      const selectedCoverStaffId = getDefaultCoverStaffId(shift, suggestedClock ?? null);
+
+      if (!selectedCoverStaffId) {
+        setMsg("Please select the covering staff first.");
+        return;
+      }
+
+      const hourlyRate = await getHourlyRateForShift(selectedCoverStaffId, shift.shift_start);
+
+      // 1) 先创建顶班员工的新 shift
+      const insertPayload: any = {
+        store_id: STORE_ID,
+        staff_id: selectedCoverStaffId,
+        shift_start: shift.shift_start,
+        shift_end: shift.shift_end,
+        break_minutes: shift.break_minutes ?? 0,
+        hourly_rate: hourlyRate,
+        shift_status: "SCHEDULED",
+        parent_shift_id: shift.id,
+        created_by: viewerId,
+      };
+
+      const ins = await supabase
+        .from("shifts")
+        .insert(insertPayload)
+        .select("id")
+        .single();
+
+      if (ins.error || !ins.data?.id) {
+        setMsg("Create cover shift failed: " + (ins.error?.message ?? "Could not create shift."));
+        return;
+      }
+
+      const newShiftId = ins.data.id as number;
+
+      // 2) 把原 shift 标成 COVERED，并记录 covered_by_staff_id
+      const updatePayload: any = {
+        shift_status: "COVERED",
+        covered_by_staff_id: selectedCoverStaffId,
+        shift_status_updated_by: viewerId,
+        shift_status_updated_at: new Date().toISOString(),
+      };
+
+      const up = await supabase.from("shifts").update(updatePayload).eq("id", shift.id);
+
+      if (up.error) {
+        setMsg("Created cover shift, but failed to update original shift: " + up.error.message);
+        return;
+      }
+
+      // 3) 如果有 clock，就顺手把 clock 绑到新 shift；没有也照样成功
+      const matchedClock =
+        clocks.find((c) => {
+          if (c.staff_id !== selectedCoverStaffId) return false;
+
+          const startISO = c.adjusted_clock_in_at ?? c.clock_in_at;
+          const endISO = c.adjusted_clock_out_at ?? c.clock_out_at ?? startISO;
+          if (!startISO || !endISO) return false;
+
+          return overlaps(startISO, endISO, shift.shift_start, shift.shift_end);
+        }) ?? null;
+
+      if (matchedClock) {
+        const link = await supabase
+          .from("time_clock")
+          .update({ shift_id: newShiftId })
+          .eq("id", matchedClock.id);
+
+        if (link.error) {
+          setMsg("Cover shift created, but failed to link clock: " + link.error.message);
+          await fetchData();
+          return;
+        }
+
+        setMsg("Cover shift created and linked to the covering staff clock.");
+        await fetchData();
+        return;
+      }
+
+      // 4) 没有打卡也允许成功
+      setMsg("Cover shift created. No clock was linked yet.");
+      await fetchData();
+    } catch (e: any) {
+      setMsg("Create cover shift failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function findLikelyCoverTargetForClock(clock: TimeClock) {
+    const range = getClockRange(clock);
+    if (!range) return null;
+
+    if (hasOwnRosterOverlap(clock.staff_id, range.startISO, range.endISO, null)) return null;
+
+    const candidates = shifts
+      .filter((s) => s.staff_id !== clock.staff_id)
+      .filter((s) => {
+        const status = normalizeShiftStatus(s.shift_status);
+        if (status === "CANCELLED" || status === "COVERED") return false;
+        return overlaps(s.shift_start, s.shift_end, range.startISO, range.endISO);
+      })
+      .filter((s) => !findClockForShift(s))
+      .map((s) => {
+        const overlap = Math.max(
+          0,
+          Math.round(
+            (Math.min(new Date(s.shift_end).getTime(), new Date(range.endISO).getTime()) -
+              Math.max(new Date(s.shift_start).getTime(), new Date(range.startISO).getTime())) /
+              60000
+          )
+        );
+        return { shift: s, overlap };
+      })
+      .filter((x) => x.overlap >= 30)
+      .sort((a, b) => b.overlap - a.overlap);
+
+    return candidates[0]?.shift ?? null;
+  }
+
   function getPayrollResult(shift: Shift, clock: TimeClock | null, leave: LeaveRecord | null) {
     const status = normalizeShiftStatus(shift.shift_status);
     const breakMin = shift.break_minutes ?? 0;
@@ -948,7 +1267,7 @@ export default function ClockAdjustmentPage() {
 
     if (leave) {
       const leaveType = getLeaveCategory(leave.reason);
-      const rate = Number(weekdayRateByStaff[shift.staff_id] ?? 0);
+      const rate = Number(shift.hourly_rate ?? 0);
       const payClass: PayClass = leaveType === "ANNUAL_LEAVE" ? "ANNUAL_LEAVE" : "SICK_LEAVE";
       const hours = round2(rosterWorkMin / 60);
       return {
@@ -956,15 +1275,6 @@ export default function ClockAdjustmentPage() {
         source: "LEAVE",
         hours,
         pay: round2(hours * rate),
-      };
-    }
-
-    if (status === "SICK") {
-      return {
-        payClass: "SICK_LEAVE" as PayClass,
-        source: "STATUS",
-        hours: 0,
-        pay: 0,
       };
     }
 
@@ -1079,7 +1389,48 @@ export default function ClockAdjustmentPage() {
         alerts,
       };
     });
-  }, [filteredShifts, clocks, leaveRows, weekdayRateByStaff]);
+  }, [filteredShifts, clocks, leaveRows, weekdayRateByStaff, coverStaffByShift, coverNoteByShift]);
+
+  const unrosteredClocks = useMemo(() => {
+    function localDateISOFromAny(iso?: string | null) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function isClockInsideSelectedLocalDates(clock: TimeClock) {
+      const basis = clock.clock_in_at ?? clock.adjusted_clock_in_at ?? clock.clock_out_at ?? null;
+      if (!basis) return false;
+      const localISO = localDateISOFromAny(basis);
+      return localISO >= fromDate && localISO <= toDate;
+    }
+
+    const matchedClockIds = new Set<number>();
+    for (const r of rows) {
+      if (r.clock?.id) matchedClockIds.add(r.clock.id);
+    }
+
+    return clocks
+      .filter((c) => !matchedClockIds.has(c.id))
+      .filter((c) => isClockInsideSelectedLocalDates(c))
+      .filter((c) => {
+        const range = getClockRange(c);
+        if (!range) return false;
+        return !hasOwnRosterOverlap(c.staff_id, range.startISO, range.endISO, null);
+      })
+      .map((c) => ({
+        clock: c,
+        likelyCoverShift: findLikelyCoverTargetForClock(c),
+      }))
+      .sort((a, b) => {
+        const ta = new Date(a.clock.adjusted_clock_in_at ?? a.clock.clock_in_at ?? 0).getTime();
+        const tb = new Date(b.clock.adjusted_clock_in_at ?? b.clock.clock_in_at ?? 0).getTime();
+        return ta - tb;
+      });
+  }, [clocks, rows, shifts, fromDate, toDate]);
 
   const overallSummary = useMemo(() => {
     let totalHours = 0;
@@ -1403,6 +1754,75 @@ export default function ClockAdjustmentPage() {
           </div>
         )}
 
+        {unrosteredClocks.length > 0 && (
+          <div
+            style={{
+              border: `1px solid ${BORDER}`,
+              borderRadius: 18,
+              background: CARD_BG,
+              padding: 18,
+              marginBottom: 16,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+            }}
+          >
+            <div style={{ marginBottom: 14 }}>
+              <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Unrostered Staff Detected</h2>
+              <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
+                These clock records do not currently match any rostered shift.
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {unrosteredClocks.map(({ clock, likelyCoverShift }) => {
+                const range = getClockRange(clock);
+                const startLabel = fmtAU(range?.startISO ?? clock.clock_in_at);
+                const endLabel = fmtAU(range?.endISO ?? clock.clock_out_at);
+                return (
+                  <div
+                    key={clock.id}
+                    style={{
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: 12,
+                      background: likelyCoverShift ? "#F5F9FF" : "#FFFFFF",
+                      padding: 12,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontWeight: 800, color: TEXT }}>{staffLabel(clock.staff_id)}</div>
+                        <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                          {startLabel} → {endLabel}
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                          {likelyCoverShift ? (
+                            badge(`LIKELY COVER FOR ${staffLabel(likelyCoverShift.staff_id)}`, { kind: "blue" })
+                          ) : (
+                            badge("EXTRA STAFF / UNROSTERED CLOCK", { kind: "yellow" })
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                        {likelyCoverShift ? (
+                          actionButton("Use as Cover", () => createShiftFromClock(clock, {
+                            parentShift: likelyCoverShift,
+                            markParentCovered: true,
+                          }), { primary: true, disabled: loading })
+                        ) : null}
+
+                        {actionButton("Create Shift", () => createShiftFromClock(clock), {
+                          primary: !likelyCoverShift,
+                          disabled: loading,
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div
           style={{
             border: `1px solid ${BORDER}`,
@@ -1492,10 +1912,10 @@ export default function ClockAdjustmentPage() {
                   const hasClock = !!clockId;
 
                   const adjustedInValue = clock
-                    ? editIn[clockId!] ?? toLocalInputValue(clock.adjusted_clock_in_at ?? clock.clock_in_at)
+                    ? editIn[clockId!] ?? toLocalInputValue(clock.adjusted_clock_in_at)
                     : "";
                   const adjustedOutValue = clock
-                    ? editOut[clockId!] ?? toLocalInputValue(clock.adjusted_clock_out_at ?? clock.clock_out_at)
+                    ? editOut[clockId!] ?? toLocalInputValue(clock.adjusted_clock_out_at)
                     : "";
 
                   const sourceBadge =
@@ -1558,6 +1978,16 @@ export default function ClockAdjustmentPage() {
                       >
                         <div style={{ marginBottom: 8 }}>{statusBadge(shift.shift_status)}</div>
 
+                        {shift.parent_shift_id ? (
+                          <div style={{ marginBottom: 8 }}>{badge("COVERING SHIFT", { kind: "green" })}</div>
+                        ) : null}
+
+                        {shift.covered_by_staff_id ? (
+                          <div style={{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
+                            Covered by <b style={{ color: TEXT }}>{staffLabel(shift.covered_by_staff_id)}</b>
+                          </div>
+                        ) : null}
+
                         <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Change</div>
                         <select
                           value={normalizeShiftStatus(shift.shift_status)}
@@ -1568,10 +1998,43 @@ export default function ClockAdjustmentPage() {
                           <option value="SCHEDULED">Scheduled</option>
                           <option value="WORKED">Worked</option>
                           <option value="ABSENT">Absent</option>
-                          <option value="SICK">Sick</option>
                           <option value="COVERED">Covered</option>
                           <option value="CANCELLED">Cancelled</option>
                         </select>
+
+                        {normalizeShiftStatus(shift.shift_status) === "COVERED" ? (
+                          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                            <div>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Covered by</div>
+                              <select
+                                value={getDefaultCoverStaffId(shift, r.coverClock)}
+                                onChange={(e) => setCoverStaffByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                                disabled={loading}
+                                style={inputStyle("100%")}
+                              >
+                                <option value="">Select staff</option>
+                                {staffOptions
+                                  .filter((s) => s.id !== shift.staff_id)
+                                  .map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.name}
+                                    </option>
+                                  ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Note</div>
+                              <input
+                                value={coverNoteByShift[shift.id] ?? shift.cover_note ?? ""}
+                                onChange={(e) => setCoverNoteByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                                disabled={loading}
+                                placeholder="Optional note"
+                                style={inputStyle("100%")}
+                              />
+                            </div>
+                          </div>
+                        ) : null}
                       </td>
 
                       <td
@@ -1584,13 +2047,23 @@ export default function ClockAdjustmentPage() {
                         }}
                       >
                         {!clock ? (
-                          <div style={{ color: MUTED, fontSize: 12 }}>No matched clock</div>
+                          <div style={{ color: MUTED, fontSize: 12 }}>No clock</div>
                         ) : (
-                          <>
-                            <div style={{ color: TEXT, fontWeight: 700 }}>{fmtAU(clock.clock_in_at)}</div>
-                            <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>Out</div>
-                            <div style={{ color: TEXT, fontWeight: 700, marginTop: 6 }}>{fmtAU(clock.clock_out_at)}</div>
-                          </>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            <div>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Raw In</div>
+                              <div style={{ color: TEXT, fontWeight: 700 }}>
+                                {clock.clock_in_at ? fmtAU(clock.clock_in_at) : "—"}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Raw Out</div>
+                              <div style={{ color: TEXT, fontWeight: 700 }}>
+                                {clock.clock_out_at ? fmtAU(clock.clock_out_at) : "—"}
+                              </div>
+                            </div>
+                          </div>
                         )}
                       </td>
 
@@ -1604,7 +2077,7 @@ export default function ClockAdjustmentPage() {
                         }}
                       >
                         {!hasClock ? (
-                          <div style={{ color: MUTED, fontSize: 12 }}>Create a manual clock first if needed.</div>
+                          <div style={{ color: MUTED, fontSize: 12 }}>No clock to adjust.</div>
                         ) : (
                           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                             <div>
@@ -1626,6 +2099,16 @@ export default function ClockAdjustmentPage() {
                                 style={inputStyle("100%")}
                               />
                             </div>
+
+                            {clock?.adjusted_clock_in_at || clock?.adjusted_clock_out_at ? (
+                              <div style={{ fontSize: 11, color: WAK_BLUE, fontWeight: 700 }}>
+                                Adjusted time saved
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 11, color: MUTED }}>
+                                No adjustment saved
+                              </div>
+                            )}
                           </div>
                         )}
                       </td>
@@ -1665,7 +2148,7 @@ export default function ClockAdjustmentPage() {
 
                               {r.coverClock && (
                                 <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
-                                  Unrostered clock: <b style={{ color: TEXT }}>{staffLabel(r.coverClock.staff_id)}</b>
+                                  Likely cover / unrostered clock: <b style={{ color: TEXT }}>{staffLabel(r.coverClock.staff_id)}</b>
                                 </div>
                               )}
                             </>
@@ -1687,15 +2170,28 @@ export default function ClockAdjustmentPage() {
                               disabled: loading,
                             })
                           ) : (
-                            actionButton("Save Time", () => saveAdjustment(clockId!), {
-                              primary: true,
-                              disabled: loading,
-                            })
+                            <>
+                              {actionButton("Save Time", () => saveAdjustment(clockId!), {
+                                primary: true,
+                                disabled: loading,
+                              })}
+
+                              {actionButton("Clear Adjustment", () => clearAdjustment(clockId!), {
+                                disabled: loading,
+                              })}
+
+                              {actionButton("Set to roster", () => setToRoster(clockId!, shift), {
+                                disabled: loading,
+                              })}
+                            </>
                           )}
 
-                          {actionButton("Set to roster", () => setToRoster(clockId!, shift), {
-                            disabled: loading || !hasClock,
-                          })}
+                          {normalizeShiftStatus(shift.shift_status) === "COVERED"
+                            ? actionButton("Create Cover Shift", () => createCoverShiftForRow(shift, r.coverClock), {
+                                primary: true,
+                                disabled: loading || !getDefaultCoverStaffId(shift, r.coverClock),
+                              })
+                            : null}
 
                           {actionButton("Delete shift", () => deleteShift(shift.id), {
                             danger: true,
@@ -1726,7 +2222,7 @@ export default function ClockAdjustmentPage() {
           </div>
 
           <div style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
-            Use <b>Create Shift</b> first when someone covers a shift but was not rostered, then create or adjust their clock here.
+            Use <b>Create Cover Shift</b> for a real cover, or use the <b>Unrostered Staff Detected</b> section when someone was called in extra.
           </div>
         </div>
       </div>

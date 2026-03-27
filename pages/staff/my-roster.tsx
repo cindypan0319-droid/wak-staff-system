@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+type ShiftStatus = "SCHEDULED" | "WORKED" | "ABSENT" | "SICK" | "COVERED" | "CANCELLED";
+
 type ShiftRow = {
   id: number;
   store_id: string;
@@ -9,12 +11,21 @@ type ShiftRow = {
   shift_end: string;
   break_minutes: number;
   week_start: string | null;
+  shift_status: ShiftStatus | null;
+  covered_by_staff_id: string | null;
+  parent_shift_id: number | null;
+  cover_note: string | null;
+};
+
+type ProfileRow = {
+  id: string;
+  full_name: string | null;
+  preferred_name: string | null;
 };
 
 const dayLabels = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"] as const;
 
 const WAK_BLUE = "#1E5A9E";
-const WAK_RED = "#ED1C24";
 const WAK_BG = "#F5F6F8";
 const CARD_BG = "#FFFFFF";
 const BORDER = "#E5E7EB";
@@ -84,6 +95,113 @@ function isSameISODate(a: string, b: string) {
   return a === b;
 }
 
+function normalizeShiftStatus(v: string | null | undefined): ShiftStatus {
+  const s = String(v ?? "SCHEDULED").toUpperCase();
+  if (s === "WORKED") return "WORKED";
+  if (s === "ABSENT") return "ABSENT";
+  if (s === "SICK") return "SICK";
+  if (s === "COVERED") return "COVERED";
+  if (s === "CANCELLED") return "CANCELLED";
+  return "SCHEDULED";
+}
+
+function shouldCountInTotals(r: ShiftRow) {
+  const status = normalizeShiftStatus(r.shift_status);
+
+  if (status === "CANCELLED") return false;
+  if (status === "COVERED") return false;
+  if (status === "ABSENT") return false;
+  if (status === "SICK") return false;
+
+  return true;
+}
+
+function getShiftCardVisual(r: ShiftRow) {
+  const status = normalizeShiftStatus(r.shift_status);
+
+  if (r.parent_shift_id) {
+    return {
+      bg: "#ECFDF5",
+      border: "#A7F3D0",
+      title: "#065F46",
+      meta: "#047857",
+      badgeBg: "#DCFCE7",
+      badgeColor: "#166534",
+      label: "COVER SHIFT",
+    };
+  }
+
+  if (status === "COVERED") {
+    return {
+      bg: "#FFF7ED",
+      border: "#FED7AA",
+      title: "#9A3412",
+      meta: "#C2410C",
+      badgeBg: "#FFEDD5",
+      badgeColor: "#9A3412",
+      label: "COVERED",
+    };
+  }
+
+  if (status === "CANCELLED") {
+    return {
+      bg: "#F3F4F6",
+      border: "#D1D5DB",
+      title: "#4B5563",
+      meta: "#6B7280",
+      badgeBg: "#E5E7EB",
+      badgeColor: "#4B5563",
+      label: "CANCELLED",
+    };
+  }
+
+  if (status === "WORKED") {
+    return {
+      bg: "#EFF6FF",
+      border: "#BFDBFE",
+      title: "#1D4ED8",
+      meta: "#2563EB",
+      badgeBg: "#DBEAFE",
+      badgeColor: "#1D4ED8",
+      label: "WORKED",
+    };
+  }
+
+  if (status === "ABSENT") {
+    return {
+      bg: "#FEF2F2",
+      border: "#FECACA",
+      title: "#991B1B",
+      meta: "#B91C1C",
+      badgeBg: "#FEE2E2",
+      badgeColor: "#991B1B",
+      label: "NOT WORKED",
+    };
+  }
+
+  if (status === "SICK") {
+    return {
+      bg: "#F5F3FF",
+      border: "#DDD6FE",
+      title: "#6D28D9",
+      meta: "#7C3AED",
+      badgeBg: "#EDE9FE",
+      badgeColor: "#6D28D9",
+      label: "SICK",
+    };
+  }
+
+  return {
+    bg: "#FAFAFA",
+    border: BORDER,
+    title: TEXT,
+    meta: MUTED,
+    badgeBg: "#EAF3FF",
+    badgeColor: WAK_BLUE,
+    label: "SCHEDULED",
+  };
+}
+
 export default function MyRosterNextWeek() {
   const [storeId] = useState("MOOROOLBARK");
   const [uid, setUid] = useState<string | null>(null);
@@ -107,9 +225,16 @@ export default function MyRosterNextWeek() {
   }, [range.start]);
 
   const [rows, setRows] = useState<ShiftRow[]>([]);
+  const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [msg, setMsg] = useState("");
   const [isPublished, setIsPublished] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  function staffName(staffId: string | null | undefined) {
+    if (!staffId) return "";
+    const p = profiles.find((x) => x.id === staffId);
+    return p?.preferred_name || p?.full_name || staffId;
+  }
 
   async function ensureLogin() {
     const { data } = await supabase.auth.getUser();
@@ -119,6 +244,17 @@ export default function MyRosterNextWeek() {
       return;
     }
     setUid(id);
+  }
+
+  async function loadProfiles() {
+    const r = await supabase
+      .from("profiles")
+      .select("id, full_name, preferred_name")
+      .eq("is_active", true);
+
+    if (!r.error) {
+      setProfiles((r.data ?? []) as ProfileRow[]);
+    }
   }
 
   async function loadPublishedStatus() {
@@ -157,7 +293,9 @@ export default function MyRosterNextWeek() {
 
       const r = await supabase
         .from("shifts")
-        .select("id, store_id, staff_id, shift_start, shift_end, break_minutes, week_start")
+        .select(
+          "id, store_id, staff_id, shift_start, shift_end, break_minutes, week_start, shift_status, covered_by_staff_id, parent_shift_id, cover_note"
+        )
         .eq("store_id", storeId)
         .eq("staff_id", uid)
         .gte("shift_start", range.start.toISOString())
@@ -170,7 +308,7 @@ export default function MyRosterNextWeek() {
         return;
       }
 
-      setRows((r.data ?? []) as any);
+      setRows((r.data ?? []) as ShiftRow[]);
     } finally {
       setLoading(false);
     }
@@ -178,6 +316,7 @@ export default function MyRosterNextWeek() {
 
   useEffect(() => {
     ensureLogin();
+    loadProfiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -199,6 +338,7 @@ export default function MyRosterNextWeek() {
   const dailyTotals = useMemo(() => {
     const totals = Array.from({ length: 7 }, () => ({ hours: 0 }));
     for (const r of rows) {
+      if (!shouldCountInTotals(r)) continue;
       const idx = dayIndexFromISO(r.shift_start);
       totals[idx].hours += hoursBetween(r.shift_start, r.shift_end);
     }
@@ -467,22 +607,60 @@ export default function MyRosterNextWeek() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     {list.map((r) => {
                       const h = hoursBetween(r.shift_start, r.shift_end);
+                      const v = getShiftCardVisual(r);
+                      const coveredByName = r.covered_by_staff_id ? staffName(r.covered_by_staff_id) : "";
+
                       return (
                         <div
                           key={r.id}
                           style={{
                             padding: 12,
                             borderRadius: 12,
-                            border: `1px solid ${BORDER}`,
-                            background: "#FAFAFA",
+                            border: `1px solid ${v.border}`,
+                            background: v.bg,
                           }}
                         >
-                          <div style={{ fontWeight: 900, fontSize: 16, color: TEXT }}>
-                            {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start" }}>
+                            <div style={{ fontWeight: 900, fontSize: 16, color: v.title }}>
+                              {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
+                            </div>
+
+                            <div
+                              style={{
+                                fontSize: 11,
+                                fontWeight: 800,
+                                color: v.badgeColor,
+                                background: v.badgeBg,
+                                borderRadius: 999,
+                                padding: "5px 8px",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {v.label}
+                            </div>
                           </div>
-                          <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                            {h.toFixed(2)}h
+
+                          <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+                            {shouldCountInTotals(r) ? `${h.toFixed(2)}h` : "Not counted in total"}
                           </div>
+
+                          {normalizeShiftStatus(r.shift_status) === "COVERED" && coveredByName ? (
+                            <div style={{ fontSize: 12, color: v.meta, marginTop: 6, fontWeight: 700 }}>
+                              Covered
+                            </div>
+                          ) : null}
+
+                          {r.parent_shift_id ? (
+                            <div style={{ fontSize: 12, color: v.meta, marginTop: 6, fontWeight: 700 }}>
+                              You are covering another shift
+                            </div>
+                          ) : null}
+
+                          {r.cover_note ? (
+                            <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+                              Note: {r.cover_note}
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}

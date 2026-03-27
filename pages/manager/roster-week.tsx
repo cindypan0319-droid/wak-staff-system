@@ -7,6 +7,8 @@ type Profile = {
   preferred_name: string | null;
 };
 
+type ShiftStatus = "SCHEDULED" | "WORKED" | "ABSENT" | "SICK" | "COVERED" | "CANCELLED";
+
 type ShiftCostRow = {
   shift_id: number;
   store_id: string;
@@ -17,6 +19,10 @@ type ShiftCostRow = {
   hours_worked: number;
   applied_rate: number | null;
   estimated_wage: number | null;
+  shift_status?: ShiftStatus | null;
+  covered_by_staff_id?: string | null;
+  parent_shift_id?: number | null;
+  cover_note?: string | null;
 };
 
 type RawShiftRow = {
@@ -470,6 +476,97 @@ function isPaidLeaveCategory(cat: EventCategory) {
   return cat === "ANNUAL_LEAVE" || cat === "SICK_LEAVE";
 }
 
+function normalizeShiftStatus(v: string | null | undefined): ShiftStatus {
+  const s = String(v ?? "SCHEDULED").toUpperCase();
+  if (s === "WORKED") return "WORKED";
+  if (s === "ABSENT") return "ABSENT";
+  if (s === "SICK") return "SICK";
+  if (s === "COVERED") return "COVERED";
+  if (s === "CANCELLED") return "CANCELLED";
+  return "SCHEDULED";
+}
+
+function shouldCountShiftInTotals(r: ShiftCostRow) {
+  const status = normalizeShiftStatus(r.shift_status);
+  if (status === "CANCELLED") return false;
+  if (status === "COVERED") return false;
+  if (status === "ABSENT") return false;
+  if (status === "SICK") return false;
+  return true;
+}
+
+function getShiftVisual(r: ShiftCostRow) {
+  const status = normalizeShiftStatus(r.shift_status);
+
+  if (r.parent_shift_id) {
+    return {
+      bg: "#ECFDF5",
+      border: "#A7F3D0",
+      title: "#065F46",
+      meta: "#047857",
+      label: "COVERING",
+    };
+  }
+
+  if (status === "ABSENT") {
+    return {
+      bg: "#FEF2F2",
+      border: "#FECACA",
+      title: "#991B1B",
+      meta: "#B91C1C",
+      label: "ABSENT",
+    };
+  }
+
+  if (status === "SICK") {
+    return {
+      bg: "#F5F3FF",
+      border: "#DDD6FE",
+      title: "#6D28D9",
+      meta: "#7C3AED",
+      label: "SICK",
+    };
+  }
+
+  if (status === "COVERED") {
+    return {
+      bg: "#FFF7ED",
+      border: "#FED7AA",
+      title: "#9A3412",
+      meta: "#C2410C",
+      label: "COVERED",
+    };
+  }
+
+  if (status === "CANCELLED") {
+    return {
+      bg: "#F3F4F6",
+      border: "#D1D5DB",
+      title: "#4B5563",
+      meta: "#6B7280",
+      label: "CANCELLED",
+    };
+  }
+
+  if (status === "WORKED") {
+    return {
+      bg: "#ECFDF5",
+      border: "#A7F3D0",
+      title: "#065F46",
+      meta: "#047857",
+      label: "WORKED",
+    };
+  }
+
+  return {
+    bg: SHIFT_BG,
+    border: SHIFT_BORDER,
+    title: WAK_BLUE,
+    meta: MUTED,
+    label: "",
+  };
+}
+
 export default function RosterWeek() {
   const [storeId] = useState("MOOROOLBARK");
   const [weekStart, setWeekStart] = useState(() => getThisWeekThuISO());
@@ -597,20 +694,65 @@ export default function RosterWeek() {
       return;
     }
 
+    const metaRes = await supabase
+      .from("shifts")
+      .select("id, shift_status, covered_by_staff_id, parent_shift_id, cover_note")
+      .eq("store_id", storeId)
+      .gte("shift_start", range.start.toISOString())
+      .lt("shift_start", range.end.toISOString());
+
+    if (metaRes.error) {
+      setMsg("❌ Cannot load shift status: " + metaRes.error.message);
+      setRows([]);
+      return;
+    }
+
+    const metaById: Record<
+      number,
+      {
+        shift_status: ShiftStatus | null;
+        covered_by_staff_id: string | null;
+        parent_shift_id: number | null;
+        cover_note: string | null;
+      }
+    > = {};
+
+    for (const s of metaRes.data ?? []) {
+      metaById[(s as any).id] = {
+        shift_status: normalizeShiftStatus((s as any).shift_status),
+        covered_by_staff_id: (s as any).covered_by_staff_id ?? null,
+        parent_shift_id: (s as any).parent_shift_id ?? null,
+        cover_note: (s as any).cover_note ?? null,
+      };
+    }
+
     const toNum = (v: any) => (v === null || v === undefined ? 0 : Number(v));
 
     setRows(
-      (r.data ?? []).map((x: any) => ({
-        shift_id: x.shift_id,
-        store_id: x.store_id,
-        staff_id: x.staff_id,
-        shift_start: x.shift_start,
-        shift_end: x.shift_end,
-        break_minutes: toNum(x.break_minutes),
-        hours_worked: toNum(x.hours_worked),
-        applied_rate: x.applied_rate === null ? null : Number(x.applied_rate),
-        estimated_wage: x.estimated_wage === null ? null : Number(x.estimated_wage),
-      }))
+      (r.data ?? []).map((x: any) => {
+        const meta = metaById[x.shift_id] ?? {
+          shift_status: "SCHEDULED" as ShiftStatus,
+          covered_by_staff_id: null,
+          parent_shift_id: null,
+          cover_note: null,
+        };
+
+        return {
+          shift_id: x.shift_id,
+          store_id: x.store_id,
+          staff_id: x.staff_id,
+          shift_start: x.shift_start,
+          shift_end: x.shift_end,
+          break_minutes: toNum(x.break_minutes),
+          hours_worked: toNum(x.hours_worked),
+          applied_rate: x.applied_rate === null ? null : Number(x.applied_rate),
+          estimated_wage: x.estimated_wage === null ? null : Number(x.estimated_wage),
+          shift_status: meta.shift_status,
+          covered_by_staff_id: meta.covered_by_staff_id,
+          parent_shift_id: meta.parent_shift_id,
+          cover_note: meta.cover_note,
+        };
+      })
     );
   }
 
@@ -1080,18 +1222,65 @@ export default function RosterWeek() {
     return g;
   }, [allEvents, staffIds, range.start]);
 
-  const storeTotalHours = rows.reduce((sum, r) => sum + r.hours_worked, 0);
-  const storeTotalWage = rows.reduce((sum, r) => sum + (r.estimated_wage ?? 0), 0);
+  function getRateForDate(staffId: string, dateISO: string) {
+    const rateRow = payRateByStaff[staffId];
+    if (!rateRow) return 0;
+
+    if (isVictoriaPublicHolidayISO(dateISO)) {
+      return Number(rateRow.holiday_rate ?? rateRow.weekday_rate ?? 0);
+    }
+
+    const day = new Date(dateISO + "T00:00:00").getDay();
+    if (day === 6) return Number(rateRow.saturday_rate ?? rateRow.weekday_rate ?? 0);
+    if (day === 0) return Number(rateRow.sunday_rate ?? rateRow.weekday_rate ?? 0);
+    return Number(rateRow.weekday_rate ?? 0);
+  }
+
+  const countedRows = useMemo(() => rows.filter(shouldCountShiftInTotals), [rows]);
+
+  const paidLeaveEvents = useMemo(() => {
+    return allEvents.filter((e) => {
+      const cat = getEventCategory(e.reason, e.kind);
+      if (e.kind === "recurring" && e.isSkippedThisWeek) return false;
+      return isPaidLeaveCategory(cat);
+    });
+  }, [allEvents]);
+
+  const storeTotalHours = useMemo(() => {
+    const shiftHours = countedRows.reduce((sum, r) => sum + r.hours_worked, 0);
+    const leaveHours = paidLeaveEvents.reduce((sum, e) => sum + hoursBetween(e.start_at, e.end_at), 0);
+    return shiftHours + leaveHours;
+  }, [countedRows, paidLeaveEvents]);
+
+  const storeTotalWage = useMemo(() => {
+    const shiftWage = countedRows.reduce((sum, r) => sum + (r.estimated_wage ?? 0), 0);
+    const leaveWage = paidLeaveEvents.reduce((sum, e) => {
+      const dateISO = toISODate(new Date(e.start_at));
+      return sum + hoursBetween(e.start_at, e.end_at) * getRateForDate(e.staff_id, dateISO);
+    }, 0);
+    return shiftWage + leaveWage;
+  }, [countedRows, paidLeaveEvents, payRateByStaff]);
 
   const dailyTotals = useMemo(() => {
     const totals = Array.from({ length: 7 }, () => ({ hours: 0, wage: 0 }));
-    for (const r of rows) {
+
+    for (const r of countedRows) {
       const idx = dayIndexFromISO(r.shift_start);
       totals[idx].hours += r.hours_worked;
       totals[idx].wage += r.estimated_wage ?? 0;
     }
+
+    for (const e of paidLeaveEvents) {
+      const idx = dayIndexFromISO(e.start_at);
+      const hrs = hoursBetween(e.start_at, e.end_at);
+      const dateISO = toISODate(new Date(e.start_at));
+      const rate = getRateForDate(e.staff_id, dateISO);
+      totals[idx].hours += hrs;
+      totals[idx].wage += hrs * rate;
+    }
+
     return totals;
-  }, [rows]);
+  }, [countedRows, paidLeaveEvents, payRateByStaff]);
 
   const weeklySummaryByStaff = useMemo(() => {
     const out: Record<string, { totalHours: number; wage: number }> = {};
@@ -1099,26 +1288,23 @@ export default function RosterWeek() {
       out[sid] = { totalHours: 0, wage: 0 };
     }
 
-    for (const r of rows) {
+    for (const r of countedRows) {
       out[r.staff_id] ??= { totalHours: 0, wage: 0 };
       out[r.staff_id].totalHours += Number(r.hours_worked ?? 0);
       out[r.staff_id].wage += Number(r.estimated_wage ?? 0);
     }
 
-    for (const e of allEvents) {
-      const cat = getEventCategory(e.reason, e.kind);
-      if (!isPaidLeaveCategory(cat)) continue;
-
+    for (const e of paidLeaveEvents) {
       const hrs = hoursBetween(e.start_at, e.end_at);
-      const weekdayRate = Number(payRateByStaff[e.staff_id]?.weekday_rate ?? 0);
-
+      const dateISO = toISODate(new Date(e.start_at));
+      const rate = getRateForDate(e.staff_id, dateISO);
       out[e.staff_id] ??= { totalHours: 0, wage: 0 };
       out[e.staff_id].totalHours += hrs;
-      out[e.staff_id].wage += hrs * weekdayRate;
+      out[e.staff_id].wage += hrs * rate;
     }
 
     return out;
-  }, [staffIds, rows, allEvents, payRateByStaff]);
+  }, [staffIds, countedRows, paidLeaveEvents, payRateByStaff]);
 
   const todayISO = toISODate(new Date());
 
@@ -1535,28 +1721,59 @@ export default function RosterWeek() {
     const header = [
       "staff_name",
       "staff_id",
+      "type",
       "date",
       "shift_start",
       "shift_end",
       "hours_worked",
       "applied_rate",
       "estimated_wage",
+      "status",
+      "covered_by",
+      "cover_note",
     ].join(",");
 
-    const lines = rows.map((r) => {
+    const shiftLines = countedRows.map((r) => {
+      const coveredBy = r.covered_by_staff_id ? staffName(r.covered_by_staff_id) : "";
+      const status = r.parent_shift_id ? "COVERING" : normalizeShiftStatus(r.shift_status);
       return [
         `"${staffName(r.staff_id).replace(/"/g, '""')}"`,
         r.staff_id,
+        "SHIFT",
         toISODate(new Date(r.shift_start)),
         r.shift_start,
         r.shift_end,
         Number(r.hours_worked ?? 0).toFixed(2),
         Number(r.applied_rate ?? 0).toFixed(2),
         Number(r.estimated_wage ?? 0).toFixed(2),
+        `"${status}"`,
+        `"${String(coveredBy).replace(/"/g, '""')}"`,
+        `"${String(r.cover_note ?? "").replace(/"/g, '""')}"`,
       ].join(",");
     });
 
-    downloadCSV(`roster_week_${storeId}_${weekStart}.csv`, [header, ...lines].join("\n"));
+    const leaveLines = paidLeaveEvents.map((e) => {
+      const dateISO = toISODate(new Date(e.start_at));
+      const hrs = hoursBetween(e.start_at, e.end_at);
+      const rate = getRateForDate(e.staff_id, dateISO);
+      const cat = getEventCategory(e.reason, e.kind);
+      return [
+        `"${staffName(e.staff_id).replace(/"/g, '""')}"`,
+        e.staff_id,
+        `"${cat}"`,
+        dateISO,
+        e.start_at,
+        e.end_at,
+        hrs.toFixed(2),
+        rate.toFixed(2),
+        (hrs * rate).toFixed(2),
+        `"${cat}"`,
+        `""`,
+        `"${String(e.reason ?? "").replace(/"/g, '""')}"`,
+      ].join(",");
+    });
+
+    downloadCSV(`roster_week_${storeId}_${weekStart}.csv`, [header, ...shiftLines, ...leaveLines].join("\n"));
   }
 
   return (
@@ -2374,32 +2591,48 @@ export default function RosterWeek() {
                           ) : null}
 
                           <div style={{ display: "grid", gap: 8 }}>
-                            {dayRows.map((r) => (
-                              <div
-                                key={r.shift_id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openDrawerForEditShift(r);
-                                }}
-                                style={{
-                                  padding: 10,
-                                  border: `1px solid ${SHIFT_BORDER}`,
-                                  borderRadius: 12,
-                                  background: SHIFT_BG,
-                                  boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
-                                }}
-                              >
-                                <div style={{ fontWeight: 900, color: WAK_BLUE }}>
-                                  {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
+                            {dayRows.map((r) => {
+                              const v = getShiftVisual(r);
+                              const coveredBy = r.covered_by_staff_id ? staffName(r.covered_by_staff_id) : "";
+                              const note = (r.cover_note ?? "").trim();
+
+                              return (
+                                <div
+                                  key={r.shift_id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openDrawerForEditShift(r);
+                                  }}
+                                  style={{
+                                    padding: 10,
+                                    border: `1px solid ${v.border}`,
+                                    borderRadius: 12,
+                                    background: v.bg,
+                                    boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                                  }}
+                                >
+                                  <div style={{ fontWeight: 900, color: v.title }}>
+                                    {fmtTime(r.shift_start)}–{fmtTime(r.shift_end)}
+                                  </div>
+
+                                  {v.label ? (
+                                    <div style={{ fontSize: 11, fontWeight: 900, color: v.meta, marginTop: 4 }}>
+                                      {v.label}
+                                      {coveredBy ? ` · by ${coveredBy}` : ""}
+                                    </div>
+                                  ) : null}
+
+                                  {note ? <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>Note: {note}</div> : null}
+
+                                  <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                                    {r.hours_worked.toFixed(2)}h | Rate ${Number(r.applied_rate ?? 0).toFixed(2)}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: TEXT, marginTop: 2 }}>
+                                    Wage ${Number(r.estimated_wage ?? 0).toFixed(2)}
+                                  </div>
                                 </div>
-                                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                                  {r.hours_worked.toFixed(2)}h | Rate ${Number(r.applied_rate ?? 0).toFixed(2)}
-                                </div>
-                                <div style={{ fontSize: 12, color: TEXT, marginTop: 2 }}>
-                                  Wage ${Number(r.estimated_wage ?? 0).toFixed(2)}
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
 
                           {dayRows.length === 0 && dayLeaves.length === 0 && dayUnav.length === 0 ? (
