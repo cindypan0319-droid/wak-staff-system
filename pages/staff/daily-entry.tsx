@@ -6,8 +6,6 @@ const DEFAULT_FLOAT_IF_NO_MORNING = 400;
 const EPS = 0.01;
 const AUTO_SAVE_DELAY = 2500;
 
-
-
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
 const WAK_BG = "#F5F6F8";
@@ -140,6 +138,54 @@ const denomFields: { label: string; key: keyof CashCounts }[] = [
   { label: "5c coins", key: "coin5c" },
 ];
 
+function normalizeCountsForCompare(c: CashCounts) {
+  return countsToStoredJson(c);
+}
+
+function buildMorningSnapshot(counts: CashCounts) {
+  return JSON.stringify({
+    counts: normalizeCountsForCompare(counts),
+  });
+}
+
+function buildClosingSnapshot(args: {
+  nightCounts: CashCounts;
+  removedCounts: CashCounts;
+  cashSalesText: string;
+  eftposSalesText: string;
+  notes: string;
+  cashDiffReason: CashDiffReason;
+  cashDiffNote: string;
+  platforms: Platform[];
+  platformGrossText: Record<string, string>;
+}) {
+  const normalizedPlatforms = args.platforms
+    .slice()
+    .sort((a, b) => {
+      if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+      return a.name.localeCompare(b.name);
+    })
+    .map((p) => ({
+      name: p.name,
+      gross: round2(parseMoneyOrZero(args.platformGrossText[p.name] ?? "")),
+    }));
+
+  return JSON.stringify({
+    nightCounts: normalizeCountsForCompare(args.nightCounts),
+    removedCounts: normalizeCountsForCompare(args.removedCounts),
+    cashSales: round2(parseMoneyOrZero(args.cashSalesText)),
+    eftposSales: round2(parseMoneyOrZero(args.eftposSalesText)),
+    notes: args.notes.trim(),
+    cashDiffReason: args.cashDiffReason || "",
+    cashDiffNote: args.cashDiffNote.trim(),
+    platforms: normalizedPlatforms,
+  });
+}
+
+function getAutoCashDiffReason(): CashDiffReason {
+  return "COUNTING_MISTAKE";
+}
+
 export default function DailyEntryPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -182,6 +228,9 @@ export default function DailyEntryPage() {
   const closingSavingRef = useRef(false);
   const lastAutoSaveKeyRef = useRef<string>("");
 
+  const morningServerSnapshotRef = useRef<string>("");
+  const closingServerSnapshotRef = useRef<string>("");
+
   const morningTotal = useMemo(() => calcTotal(morningCounts), [morningCounts]);
   const nightTotal = useMemo(() => calcTotal(nightCounts), [nightCounts]);
   const removedTotal = useMemo(() => calcTotal(removedCounts), [removedCounts]);
@@ -213,36 +262,71 @@ export default function DailyEntryPage() {
 
   const total = useMemo(() => round2(instoreSubtotal + onlineSubtotal), [instoreSubtotal, onlineSubtotal]);
 
+  const currentMorningSnapshot = useMemo(() => {
+    return buildMorningSnapshot(morningCounts);
+  }, [morningCounts]);
+
+  const currentClosingSnapshot = useMemo(() => {
+    return buildClosingSnapshot({
+      nightCounts,
+      removedCounts,
+      cashSalesText,
+      eftposSalesText,
+      notes,
+      cashDiffReason,
+      cashDiffNote,
+      platforms,
+      platformGrossText,
+    });
+  }, [
+    nightCounts,
+    removedCounts,
+    cashSalesText,
+    eftposSalesText,
+    notes,
+    cashDiffReason,
+    cashDiffNote,
+    platforms,
+    platformGrossText,
+  ]);
+
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+    setMorningDirty(currentMorningSnapshot !== morningServerSnapshotRef.current);
+  }, [currentMorningSnapshot]);
+
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+    setClosingDirty(currentClosingSnapshot !== closingServerSnapshotRef.current);
+  }, [currentClosingSnapshot]);
+
   useEffect(() => {
     async function checkStoreAccess() {
+      setStoreAccessLoading(true);
       try {
-        const res = await fetch("/api/check-store-access");
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+
+        const res = await fetch("/api/check-store-access", {
+          headers: token
+            ? {
+                Authorization: `Bearer ${token}`,
+              }
+            : {},
+        });
         const data = await res.json();
+
+        setIsStoreDevice(!!data.allowed);
+        setDetectedIp(data.ip || "");
 
         if (!data.allowed) {
           window.location.href = "/staff/home";
         }
       } catch (error) {
         console.log("check store access error:", error);
-        window.location.href = "/staff/home";
-      }
-    }
-
-    checkStoreAccess();
-  }, []);
-
-  useEffect(() => {
-    async function checkStoreAccess() {
-      setStoreAccessLoading(true);
-      try {
-        const res = await fetch("/api/check-store-access");
-        const data = await res.json();
-        setIsStoreDevice(!!data.allowed);
-        setDetectedIp(data.ip || "");
-      } catch (error) {
-        console.log("check store access error:", error);
         setIsStoreDevice(false);
         setDetectedIp("");
+        window.location.href = "/staff/home";
       } finally {
         setStoreAccessLoading(false);
       }
@@ -259,22 +343,20 @@ export default function DailyEntryPage() {
   ) {
     const n = parseIntOrNull(raw);
     setter((prev) => ({ ...prev, [key]: n }));
+
     if (initialLoadDoneRef.current) {
       if (section === "morning") {
-        setMorningDirty(true);
         setMorningSaveState("idle");
         setMorningSaveError("");
       } else {
-        setClosingDirty(true);
         setClosingSaveState("idle");
         setClosingSaveError("");
       }
     }
   }
 
-  function markClosingDirty() {
+  function markClosingDirtyStyleOnly() {
     if (initialLoadDoneRef.current) {
-      setClosingDirty(true);
       setClosingSaveState("idle");
       setClosingSaveError("");
     }
@@ -291,18 +373,23 @@ export default function DailyEntryPage() {
     if (res.error) {
       setMsg("❌ Cannot load platforms: " + res.error.message);
       setPlatforms([]);
-      return;
+      return [];
     }
-    setPlatforms((res.data ?? []) as any);
+
+    const list = (res.data ?? []) as Platform[];
+    setPlatforms(list);
+    return list;
   }
 
-  async function loadExisting() {
+  async function loadExisting(options?: { restoreDraft?: boolean }) {
+    const restoreDraft = options?.restoreDraft ?? true;
+
     setLoading(true);
     setMsg("");
     initialLoadDoneRef.current = false;
 
     try {
-      await loadPlatforms();
+      const loadedPlatforms = await loadPlatforms();
 
       const ds = await supabase
         .from("daily_sales")
@@ -319,9 +406,9 @@ export default function DailyEntryPage() {
       const cashVal = row?.cash_sales;
       const eftVal = row?.eftpos_sales;
 
-      setCashSalesText(cashVal == null || Number(cashVal) === 0 ? "" : String(cashVal));
-      setEftposSalesText(eftVal == null || Number(eftVal) === 0 ? "" : String(eftVal));
-      setNotes(row?.notes ?? "");
+      const serverCashSalesText = cashVal == null || Number(cashVal) === 0 ? "" : String(cashVal);
+      const serverEftposSalesText = eftVal == null || Number(eftVal) === 0 ? "" : String(eftVal);
+      const serverNotes = row?.notes ?? "";
 
       const pi = await supabase
         .from("platform_income")
@@ -329,6 +416,7 @@ export default function DailyEntryPage() {
         .eq("business_date", date)
         .eq("store_id", DEFAULT_STORE_ID);
 
+      let serverPlatformGrossText: Record<string, string> = {};
       if (pi.error) {
         setMsg((prev) => prev || "❌ Cannot load online sales: " + pi.error.message);
       } else {
@@ -338,7 +426,7 @@ export default function DailyEntryPage() {
           const g = (r as any).gross_income;
           map[p] = g == null || Number(g) === 0 ? "" : String(g);
         }
-        setPlatformGrossText(map);
+        serverPlatformGrossText = map;
       }
 
       const m = await supabase
@@ -353,13 +441,10 @@ export default function DailyEntryPage() {
         setMsg((prev) => prev || "❌ Cannot load morning cashup: " + m.error.message);
       }
 
-      if (m.data) {
-        setHasMorningRecord(true);
-        setMorningCounts(storedJsonToCounts((m.data as any).counts ?? {}));
-      } else {
-        setHasMorningRecord(false);
-        setMorningCounts({ ...emptyCounts });
-      }
+      const serverHasMorningRecord = !!m.data;
+      const serverMorningCounts = m.data
+        ? storedJsonToCounts((m.data as any).counts ?? {})
+        : { ...emptyCounts };
 
       const n = await supabase
         .from("cashup_sessions")
@@ -373,52 +458,80 @@ export default function DailyEntryPage() {
         setMsg((prev) => prev || "❌ Cannot load closing cashup: " + n.error.message);
       }
 
-      if (n.data) setNightCounts(storedJsonToCounts((n.data as any).counts ?? {}));
-      else setNightCounts({ ...emptyCounts });
+      const serverNightCounts = n.data
+        ? storedJsonToCounts((n.data as any).counts ?? {})
+        : { ...emptyCounts };
 
       const nightCountsRaw = (n.data as any)?.counts ?? {};
       const removedRaw = nightCountsRaw?._removed_counts ?? null;
       const reasonRaw = nightCountsRaw?._cash_diff_reason ?? "";
       const noteRaw = nightCountsRaw?._cash_diff_note ?? "";
 
-      if (removedRaw) setRemovedCounts(storedJsonToCounts(removedRaw));
-      else setRemovedCounts({ ...emptyCounts });
+      const serverRemovedCounts = removedRaw
+        ? storedJsonToCounts(removedRaw)
+        : { ...emptyCounts };
 
-      setCashDiffReason((reasonRaw as CashDiffReason) || "");
-      setCashDiffNote(String(noteRaw ?? ""));
+      const serverCashDiffReason = ((reasonRaw as CashDiffReason) || "") as CashDiffReason;
+      const serverCashDiffNote = String(noteRaw ?? "");
 
-      setMorningDirty(false);
-      setClosingDirty(false);
+      morningServerSnapshotRef.current = buildMorningSnapshot(serverMorningCounts);
+      closingServerSnapshotRef.current = buildClosingSnapshot({
+        nightCounts: serverNightCounts,
+        removedCounts: serverRemovedCounts,
+        cashSalesText: serverCashSalesText,
+        eftposSalesText: serverEftposSalesText,
+        notes: serverNotes,
+        cashDiffReason: serverCashDiffReason,
+        cashDiffNote: serverCashDiffNote,
+        platforms: loadedPlatforms,
+        platformGrossText: serverPlatformGrossText,
+      });
+
+      setHasMorningRecord(serverHasMorningRecord);
+      setMorningCounts(serverMorningCounts);
+      setNightCounts(serverNightCounts);
+      setRemovedCounts(serverRemovedCounts);
+
+      setCashSalesText(serverCashSalesText);
+      setEftposSalesText(serverEftposSalesText);
+      setNotes(serverNotes);
+      setPlatformGrossText(serverPlatformGrossText);
+      setCashDiffReason(serverCashDiffReason);
+      setCashDiffNote(serverCashDiffNote);
+
       setMorningSaveState("idle");
       setClosingSaveState("idle");
       setMorningSaveError("");
       setClosingSaveError("");
+      setMorningDirty(false);
+      setClosingDirty(false);
 
       setMsg("✅ Loaded saved data for this date.");
 
-      const savedDraft = localStorage.getItem(draftKey);
+      if (restoreDraft) {
+        const savedDraft = localStorage.getItem(draftKey);
 
-      if (savedDraft) {
-        try {
-          const d = JSON.parse(savedDraft);
+        if (savedDraft) {
+          try {
+            const d = JSON.parse(savedDraft);
 
-          setCashSalesText(d.cashSalesText ?? "");
-          setEftposSalesText(d.eftposSalesText ?? "");
-          setNotes(d.notes ?? "");
-          setPlatformGrossText(d.platformGrossText ?? {});
-          setMorningCounts(d.morningCounts ?? { ...emptyCounts });
-          setNightCounts(d.nightCounts ?? { ...emptyCounts });
-          setRemovedCounts(d.removedCounts ?? { ...emptyCounts });
-          setCashDiffReason(d.cashDiffReason ?? "");
-          setCashDiffNote(d.cashDiffNote ?? "");
-          setHasMorningRecord(!!d.hasMorningRecord);
+            setCashSalesText(d.cashSalesText ?? "");
+            setEftposSalesText(d.eftposSalesText ?? "");
+            setNotes(d.notes ?? "");
+            setPlatformGrossText(d.platformGrossText ?? {});
+            setMorningCounts(d.morningCounts ?? { ...emptyCounts });
+            setNightCounts(d.nightCounts ?? { ...emptyCounts });
+            setRemovedCounts(d.removedCounts ?? { ...emptyCounts });
+            setCashDiffReason(d.cashDiffReason ?? "");
+            setCashDiffNote(d.cashDiffNote ?? "");
+            setHasMorningRecord(!!d.hasMorningRecord);
 
-          setMsg("ℹ️ Restored unsaved local draft.");
-        } catch (e) {
-          console.log("restore draft error:", e);
+            setMsg("ℹ️ Restored unsaved local draft.");
+          } catch (e) {
+            console.log("restore draft error:", e);
+          }
         }
       }
-
     } finally {
       setLoading(false);
       initialLoadDoneRef.current = true;
@@ -426,7 +539,7 @@ export default function DailyEntryPage() {
   }
 
   useEffect(() => {
-    loadExisting();
+    loadExisting({ restoreDraft: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
@@ -434,10 +547,12 @@ export default function DailyEntryPage() {
     if (morningSavingRef.current) return true;
 
     morningSavingRef.current = true;
+
     if (!options?.silent) {
       setLoading(true);
       setMsg("");
     }
+
     setMorningSaveState("saving");
     setMorningSaveError("");
 
@@ -482,14 +597,16 @@ export default function DailyEntryPage() {
         return false;
       }
 
+      morningServerSnapshotRef.current = buildMorningSnapshot(morningCounts);
       setMorningDirty(false);
       setHasMorningRecord(true);
       setMorningSaveState("saved");
       setMorningLastSavedAt(new Date().toISOString());
-      
+
       if (!options?.silent) {
         setMsg("✅ Morning cashup saved!");
       }
+
       return true;
     } finally {
       morningSavingRef.current = false;
@@ -501,7 +618,7 @@ export default function DailyEntryPage() {
 
   function useCashToRemoveAsCashSales() {
     setCashSalesText(String(cashToRemove.toFixed(2)));
-    markClosingDirty();
+    markClosingDirtyStyleOnly();
   }
 
   function needReason() {
@@ -509,7 +626,6 @@ export default function DailyEntryPage() {
   }
 
   async function saveClosingAndSales(options?: { silent?: boolean }) {
-
     const autoSaveKey = JSON.stringify({
       date,
       nightCounts,
@@ -529,8 +645,12 @@ export default function DailyEntryPage() {
     if (closingSavingRef.current) return true;
 
     closingSavingRef.current = true;
-    
-  
+
+    if (!options?.silent) {
+      setLoading(true);
+      setMsg("");
+    }
+
     setClosingSaveState("saving");
     setClosingSaveError("");
 
@@ -553,27 +673,26 @@ export default function DailyEntryPage() {
         return false;
       }
 
+      let finalCashDiffReason: CashDiffReason = cashDiffReason;
+      let finalCashDiffNote = cashDiffNote;
+
       if (needReason()) {
-        if (!cashDiffReason) {
-          const text = "❌ Please select a reason (Actual cash sales ≠ Should remove).";
-          if (!options?.silent) setMsg(text);
-          setClosingSaveState("error");
-          setClosingSaveError(text);
-          return false;
+        if (!finalCashDiffReason) {
+          finalCashDiffReason = getAutoCashDiffReason();
         }
-        if (cashDiffReason === "OTHER" && !cashDiffNote.trim()) {
-          const text = "❌ Please write a note for 'Other'.";
-          if (!options?.silent) setMsg(text);
-          setClosingSaveState("error");
-          setClosingSaveError(text);
-          return false;
+
+        if (finalCashDiffReason === "OTHER" && !finalCashDiffNote.trim()) {
+          finalCashDiffNote = "Auto-saved without staff note.";
         }
+      } else {
+        finalCashDiffReason = "";
+        finalCashDiffNote = "";
       }
 
       const nightCountsStore: any = countsToStoredJson(nightCounts);
       nightCountsStore._removed_counts = countsToStoredJson(removedCounts);
-      nightCountsStore._cash_diff_reason = cashDiffReason;
-      nightCountsStore._cash_diff_note = cashDiffNote;
+      nightCountsStore._cash_diff_reason = finalCashDiffReason;
+      nightCountsStore._cash_diff_note = finalCashDiffNote;
 
       const nightPayload: any = {
         business_date: date,
@@ -642,16 +761,34 @@ export default function DailyEntryPage() {
         }
       }
 
+      setCashDiffReason(finalCashDiffReason);
+      setCashDiffNote(finalCashDiffNote);
+
+      closingServerSnapshotRef.current = buildClosingSnapshot({
+        nightCounts,
+        removedCounts,
+        cashSalesText,
+        eftposSalesText,
+        notes,
+        cashDiffReason: finalCashDiffReason,
+        cashDiffNote: finalCashDiffNote,
+        platforms,
+        platformGrossText,
+      });
+
       setClosingDirty(false);
       setClosingSaveState("saved");
       setClosingLastSavedAt(new Date().toISOString());
       localStorage.removeItem(draftKey);
+
       if (!options?.silent) {
         setMsg("✅ Closing saved! (cashup + sales + platforms refreshed)");
       }
+
       if (options?.silent) {
         lastAutoSaveKeyRef.current = autoSaveKey;
       }
+
       return true;
     } finally {
       closingSavingRef.current = false;
@@ -710,16 +847,6 @@ export default function DailyEntryPage() {
     if (!isStoreDevice || storeAccessLoading) return;
     if (closingSavingRef.current) return;
 
-    if (needReason() && !cashDiffReason) {
-      setClosingSaveState("idle");
-      return;
-    }
-
-    if (cashDiffReason === "OTHER" && !cashDiffNote.trim()) {
-      setClosingSaveState("idle");
-      return;
-    }
-
     const timer = setTimeout(() => {
       saveClosingAndSales({ silent: true });
     }, AUTO_SAVE_DELAY);
@@ -777,23 +904,6 @@ export default function DailyEntryPage() {
       );
     }
 
-    if (dirty) {
-      return (
-        <div
-          style={{
-            padding: "8px 12px",
-            borderRadius: 999,
-            background: "#FEF3C7",
-            color: "#92400E",
-            fontWeight: 700,
-            fontSize: 13,
-          }}
-        >
-          Unsaved changes
-        </div>
-      );
-    }
-
     if (state === "error") {
       return (
         <div
@@ -808,6 +918,23 @@ export default function DailyEntryPage() {
           }}
         >
           Save failed
+        </div>
+      );
+    }
+
+    if (dirty) {
+      return (
+        <div
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            background: "#FEF3C7",
+            color: "#92400E",
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          Unsaved changes
         </div>
       );
     }
@@ -1034,7 +1161,7 @@ export default function DailyEntryPage() {
               />
             </div>
 
-            {actionButton("Refresh", loadExisting, { disabled: loading })}
+            {actionButton("Refresh", () => loadExisting({ restoreDraft: false }), { disabled: loading })}
             {actionButton("← Back to Home", handleBackHome, { disabled: loading })}
             {loading && <span style={{ color: MUTED, fontWeight: 600 }}>Loading...</span>}
           </div>
@@ -1050,7 +1177,11 @@ export default function DailyEntryPage() {
             color: TEXT,
           }}
         >
-
+          {storeAccessLoading
+            ? "Checking store device access..."
+            : isStoreDevice
+            ? "✅ Store device/network verified. Auto-save is enabled."
+            : `⚠️ Not on approved store device/network${detectedIp ? ` (IP: ${detectedIp})` : ""}. Saving is disabled.`}
         </div>
 
         {msg && (
@@ -1147,7 +1278,7 @@ export default function DailyEntryPage() {
                 value={cashSalesText}
                 onChange={(e) => {
                   setCashSalesText(e.target.value);
-                  markClosingDirty();
+                  markClosingDirtyStyleOnly();
                 }}
                 style={{
                   width: 260,
@@ -1170,7 +1301,7 @@ export default function DailyEntryPage() {
                 value={eftposSalesText}
                 onChange={(e) => {
                   setEftposSalesText(e.target.value);
-                  markClosingDirty();
+                  markClosingDirtyStyleOnly();
                 }}
                 style={{
                   width: 260,
@@ -1208,7 +1339,7 @@ export default function DailyEntryPage() {
                 value={notes}
                 onChange={(e) => {
                   setNotes(e.target.value);
-                  markClosingDirty();
+                  markClosingDirtyStyleOnly();
                 }}
                 rows={4}
                 style={{
@@ -1235,7 +1366,7 @@ export default function DailyEntryPage() {
             >
               <div style={{ fontWeight: 700, color: TEXT, marginBottom: 8 }}>Cash Difference Check</div>
               <div style={{ color: MUTED, marginBottom: needReason() ? 12 : 0 }}>
-                If this difference is not zero, a reason is required before saving closing.
+                If this difference is not zero, the system will auto-fill a default reason if staff leave it blank.
               </div>
 
               {needReason() && (
@@ -1246,7 +1377,7 @@ export default function DailyEntryPage() {
                       value={cashDiffReason}
                       onChange={(e) => {
                         setCashDiffReason(e.target.value as CashDiffReason);
-                        markClosingDirty();
+                        markClosingDirtyStyleOnly();
                       }}
                       style={{
                         width: 320,
@@ -1258,7 +1389,7 @@ export default function DailyEntryPage() {
                         background: "#fff",
                       }}
                     >
-                      <option value="">-- Select reason --</option>
+                      <option value="">-- Auto if left blank --</option>
                       <option value="FLOAT_CHANGED">Cash left in till / float changed</option>
                       <option value="CASH_REFUND_OR_PAYOUT">Cash paid out / refunds</option>
                       <option value="CASH_DROP_NOT_COUNTED">Cash drop not counted (safe/other)</option>
@@ -1270,13 +1401,13 @@ export default function DailyEntryPage() {
 
                   <div>
                     <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
-                      Note {cashDiffReason === "OTHER" ? "(required)" : "(optional)"}
+                      Note {cashDiffReason === "OTHER" ? "(optional, auto-filled if blank)" : "(optional)"}
                     </div>
                     <input
                       value={cashDiffNote}
                       onChange={(e) => {
                         setCashDiffNote(e.target.value);
-                        markClosingDirty();
+                        markClosingDirtyStyleOnly();
                       }}
                       style={{
                         width: 420,
@@ -1293,7 +1424,8 @@ export default function DailyEntryPage() {
                 </>
               )}
             </div>
-          </>
+          </>,
+          saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
         )}
 
         {sectionCard(
@@ -1323,7 +1455,7 @@ export default function DailyEntryPage() {
                       value={platformGrossText[p.name] ?? ""}
                       onChange={(e) => {
                         setPlatformGrossText((prev) => ({ ...prev, [p.name]: e.target.value }));
-                        markClosingDirty();
+                        markClosingDirtyStyleOnly();
                       }}
                       style={{
                         width: 220,
