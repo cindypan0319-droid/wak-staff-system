@@ -143,12 +143,12 @@ function normalizePlatformName(name: string) {
   return String(name ?? "").trim().toUpperCase();
 }
 
-function isDoorDashName(name: string) {
+function isDOORDASHName(name: string) {
   return normalizePlatformName(name).includes("DOORDASH");
 }
 
 function isUberName(name: string) {
-  return normalizePlatformName(name).includes("UBER");
+  return normalizePlatformName(name).includes("UBER_EATS");
 }
 
 function isWakName(name: string) {
@@ -538,7 +538,7 @@ export default function OwnerDailyLogPage() {
 
       const gross = Number(p.gross_income ?? 0);
 
-      if (isDoorDashName(p.platform)) {
+      if (isDOORDASHName(p.platform)) {
         row.doordash += gross;
       } else if (isUberName(p.platform)) {
         row.uber += gross;
@@ -740,7 +740,7 @@ export default function OwnerDailyLogPage() {
       const filtered = prev.filter((x) => {
         if (!(x.store_id === DEFAULT_STORE_ID && x.business_date === businessDate)) return true;
         const n = normalizePlatformName(x.platform);
-        return !(n.includes("DOORDASH") || n.includes("UBER") || n.includes("WAK"));
+        return !(n.includes("DOORDASH") || n.includes("UBER_EATS") || n.includes("WAK"));
       });
 
       return [
@@ -748,21 +748,21 @@ export default function OwnerDailyLogPage() {
         {
           business_date: businessDate,
           store_id: DEFAULT_STORE_ID,
-          platform: "DoorDash",
+          platform: "DOORDASH",
           gross_income: doordash,
           entered_by: uid ?? null,
         },
         {
           business_date: businessDate,
           store_id: DEFAULT_STORE_ID,
-          platform: "Uber Eats",
+          platform: "UBER_EATS",
           gross_income: uber,
           entered_by: uid ?? null,
         },
         {
           business_date: businessDate,
           store_id: DEFAULT_STORE_ID,
-          platform: "WAK App",
+          platform: "WAK",
           gross_income: wakApp,
           entered_by: uid ?? null,
         },
@@ -876,9 +876,9 @@ export default function OwnerDailyLogPage() {
     if (ds.error) throw new Error("Save daily sales failed: " + ds.error.message);
 
     const platformRows = [
-      { platform: "DoorDash", value: doordash },
-      { platform: "Uber Eats", value: uber },
-      { platform: "WAK App", value: wakApp },
+      { platform: "DOORDASH", value: doordash },
+      { platform: "UBER_EATS", value: uber },
+      { platform: "WAK", value: wakApp },
     ];
 
     for (const p of platformRows) {
@@ -1069,8 +1069,8 @@ export default function OwnerDailyLogPage() {
         "EFTPOS",
         "Sub-TI",
         "DOORDASH",
-        "UBER",
-        "WAK App",
+        "UBER_EATS",
+        "WAK",
         "Online Sub-TI",
         "TI Sales",
         "Morning Cashup",
@@ -1372,7 +1372,7 @@ export default function OwnerDailyLogPage() {
             {statCard("Actual Cash", money(totals.actual_cash), WAK_BLUE)}
             {statCard("EFTPOS", money(totals.eftpos))}
             {statCard("DOORDASH", money(totals.doordash))}
-            {statCard("UBER", money(totals.uber))}
+            {statCard("UBER_EATS", money(totals.uber))}
             {statCard("WAK", money(totals.wak))}
           </div>
 
@@ -1498,8 +1498,8 @@ export default function OwnerDailyLogPage() {
                   <th style={{ ...columnHeaderStyle(INSTORE_BG), minWidth: 78, fontWeight: 900 }}>Sub-TI</th>
 
                   <th style={{ ...columnHeaderStyle(ONLINE_BG), minWidth: 82 }}>DOORDASH</th>
-                  <th style={{ ...columnHeaderStyle(ONLINE_BG), minWidth: 70 }}>UBER</th>
-                  <th style={{ ...columnHeaderStyle(ONLINE_BG), minWidth: 76 }}>WAK App</th>
+                  <th style={{ ...columnHeaderStyle(ONLINE_BG), minWidth: 70 }}>UBER_EATS</th>
+                  <th style={{ ...columnHeaderStyle(ONLINE_BG), minWidth: 76 }}>WAK</th>
                   <th style={{ ...columnHeaderStyle(ONLINE_BG), minWidth: 90, fontWeight: 900 }}>Online<br />Sub-TI</th>
 
                   <th style={{ ...columnHeaderStyle(TOTAL_BG), minWidth: 82, fontWeight: 900 }}>TI Sales</th>

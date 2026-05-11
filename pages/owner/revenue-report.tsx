@@ -64,9 +64,9 @@ export default function RevenueReport() {
               <th>Cash</th>
               <th>EFTPOS</th>
               <th>Deliveroo</th>
-              <th>DoorDash</th>
+              <th>DOORDASH</th>
               <th>Menulog</th>
-              <th>Uber Eats</th>
+              <th>UBER_EATS</th>
               <th>WAK</th>
               <th>Total</th>
             </tr>

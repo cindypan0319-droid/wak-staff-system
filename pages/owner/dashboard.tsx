@@ -592,8 +592,8 @@ export default function OwnerDashboard() {
     const outer = [
       { name: "Cash", value: cash, group: "In-store" },
       { name: "EFTPOS", value: eftpos, group: "In-store" },
-      { name: "Uber Eats", value: uber, group: "Platforms" },
-      { name: "DoorDash", value: doordash, group: "Platforms" },
+      { name: "UBER_EATS", value: uber, group: "Platforms" },
+      { name: "DOORDASH", value: doordash, group: "Platforms" },
       { name: "Deliveroo", value: deliveroo, group: "Platforms" },
       { name: "Menulog", value: menulog, group: "Platforms" },
       { name: "WAK", value: wak, group: "Platforms" },

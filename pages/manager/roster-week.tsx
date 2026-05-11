@@ -83,6 +83,22 @@ type StaffPayRateRow = {
   holiday_rate: number;
 };
 
+type DailySalesTotalRow = {
+  business_date: string;
+  store_id: string;
+  total_net: number | null;
+};
+
+type TimeClock = {
+  id: number;
+  shift_id: number | null;
+  staff_id: string;
+  clock_in_at: string | null;
+  clock_out_at: string | null;
+  adjusted_clock_in_at?: string | null;
+  adjusted_clock_out_at?: string | null;
+};
+
 const dayLabels = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"] as const;
 
 const WAK_BLUE = "#1E5A9E";
@@ -205,6 +221,10 @@ function minutesBetween(startISO: string, endISO: string) {
 
 function hoursBetween(startISO: string, endISO: string) {
   return minutesBetween(startISO, endISO) / 60;
+}
+
+function round2(n: number) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
 function actionButton(
@@ -346,6 +366,26 @@ function statCard(label: string, value: string, color?: string, extra?: React.Re
       {extra ? extra : <div style={{ fontWeight: 800, fontSize: 18, color: color || TEXT }}>{value}</div>}
     </div>
   );
+}
+
+function fmtMoney(n: number | null | undefined) {
+  const value = Number(n ?? 0);
+  return `$${value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function fmtPercent(n: number | null | undefined) {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  return `${n.toFixed(2)}%`;
+}
+
+function labourPctColor(pct: number | null) {
+  if (pct === null) return MUTED;
+  if (pct > 35) return WAK_RED;
+  if (pct >= 27) return "#92400E";
+  return "#166534";
 }
 
 function downloadCSV(filename: string, content: string) {
@@ -495,6 +535,10 @@ function shouldCountShiftInTotals(r: ShiftCostRow) {
   return true;
 }
 
+function isNoHourStatus(status: ShiftStatus | null | undefined) {
+  return status === "ABSENT" || status === "COVERED" || status === "SICK" || status === "CANCELLED";
+}
+
 function getShiftVisual(r: ShiftCostRow) {
   const status = normalizeShiftStatus(r.shift_status);
 
@@ -593,6 +637,8 @@ export default function RosterWeek() {
   const [recRules, setRecRules] = useState<UnavailRecurringRule[]>([]);
   const [recOverrides, setRecOverrides] = useState<RecurringOverride[]>([]);
   const [payRates, setPayRates] = useState<StaffPayRateRow[]>([]);
+  const [clocks, setClocks] = useState<TimeClock[]>([]);
+  const [dailySalesRows, setDailySalesRows] = useState<DailySalesTotalRow[]>([]);
   const [msg, setMsg] = useState("");
 
   const [isPublished, setIsPublished] = useState<boolean>(false);
@@ -652,6 +698,25 @@ export default function RosterWeek() {
       return;
     }
     setProfiles((p.data ?? []) as any);
+  }
+
+  async function loadDailySalesTotals() {
+    const r = await supabase
+      .from("daily_sales_totals")
+      .select("business_date, store_id, total_net")
+      .eq("store_id", storeId)
+      .gte("business_date", weekStart)
+      .lte("business_date", addDaysISO(weekStart, 6))
+      .order("business_date", { ascending: true });
+
+    if (r.error) {
+      console.log(r.error);
+      setDailySalesRows([]);
+      setMsg("❌ Cannot load daily sales: " + r.error.message);
+      return;
+    }
+
+    setDailySalesRows((r.data ?? []) as DailySalesTotalRow[]);
   }
 
   async function loadPayRates() {
@@ -756,6 +821,28 @@ export default function RosterWeek() {
     );
   }
 
+  async function loadTimeClocks() {
+    const clockWindowStart = new Date(range.start.getTime() - 6 * 60 * 60 * 1000).toISOString();
+    const clockWindowEnd = new Date(range.end.getTime() + 6 * 60 * 60 * 1000).toISOString();
+
+    const r = await supabase
+      .from("time_clock")
+      .select("id, shift_id, staff_id, clock_in_at, clock_out_at, adjusted_clock_in_at, adjusted_clock_out_at")
+      .gte("clock_in_at", clockWindowStart)
+      .lt("clock_in_at", clockWindowEnd)
+      .order("clock_in_at", { ascending: true })
+      .limit(3000);
+
+    if (r.error) {
+      console.log(r.error);
+      setClocks([]);
+      setMsg("❌ Cannot load time clock data: " + r.error.message);
+      return;
+    }
+
+    setClocks((r.data ?? []) as TimeClock[]);
+  }
+
   async function loadOneOffUnavailability() {
     const r = await supabase
       .from("staff_unavailability")
@@ -823,6 +910,8 @@ export default function RosterWeek() {
     await loadProfiles();
     await loadPayRates();
     await loadShiftCosts();
+    await loadTimeClocks();
+    await loadDailySalesTotals();
     await loadOneOffUnavailability();
     await loadRecurringRules();
     await loadRecurringOverrides();
@@ -1104,6 +1193,8 @@ export default function RosterWeek() {
 
   useEffect(() => {
     loadShiftCosts();
+    loadTimeClocks();
+    loadDailySalesTotals();
     loadOneOffUnavailability();
     loadRecurringRules();
     loadRecurringOverrides();
@@ -1281,6 +1372,161 @@ export default function RosterWeek() {
 
     return totals;
   }, [countedRows, paidLeaveEvents, payRateByStaff]);
+
+  const dailySalesByDate = useMemo(() => {
+    const map: Record<string, number> = {};
+
+    for (const r of dailySalesRows) {
+      map[r.business_date] = Number(r.total_net ?? 0);
+    }
+
+    return map;
+  }, [dailySalesRows]);
+
+  const weekTotalNetSales = useMemo(() => {
+    return dayDates.reduce((sum, d) => {
+      const dayISO = toISODate(d);
+      return sum + Number(dailySalesByDate[dayISO] ?? 0);
+    }, 0);
+  }, [dayDates, dailySalesByDate]);
+
+  function findClockForRosterShift(shift: ShiftCostRow) {
+    const byId = clocks.find((c) => c.shift_id === shift.shift_id);
+    if (byId) return byId;
+
+    const sStart = new Date(shift.shift_start).getTime();
+    const sEnd = new Date(shift.shift_end).getTime();
+
+    if (Number.isNaN(sStart) || Number.isNaN(sEnd)) return null;
+
+    const windowStart = sStart - 6 * 60 * 60 * 1000;
+    const windowEnd = sEnd + 6 * 60 * 60 * 1000;
+
+    const candidates = clocks
+      .filter((c) => c.staff_id === shift.staff_id && c.clock_in_at)
+      .filter((c) => {
+        const t = new Date(c.clock_in_at as string).getTime();
+        return t >= windowStart && t <= windowEnd;
+      });
+
+    if (candidates.length === 0) return null;
+
+    candidates.sort((a, b) => {
+      const ta = new Date(a.clock_in_at as string).getTime();
+      const tb = new Date(b.clock_in_at as string).getTime();
+      return Math.abs(ta - sStart) - Math.abs(tb - sStart);
+    });
+
+    return candidates[0];
+  }
+
+  function findPaidLeaveForRosterShift(shift: ShiftCostRow) {
+    const matches = paidLeaveEvents.filter(
+      (l) =>
+        l.staff_id === shift.staff_id &&
+        overlaps(l.start_at, l.end_at, shift.shift_start, shift.shift_end)
+    );
+
+    if (matches.length === 0) return null;
+    return matches[0];
+  }
+
+  function getActualPayrollForRosterShift(shift: ShiftCostRow) {
+    const status = normalizeShiftStatus(shift.shift_status);
+    const breakMin = Number(shift.break_minutes ?? 0);
+
+    const rosterMin = minutesBetween(shift.shift_start, shift.shift_end);
+    const clock = findClockForRosterShift(shift);
+
+    const rawMin =
+      clock && clock.clock_in_at && clock.clock_out_at
+        ? minutesBetween(clock.clock_in_at, clock.clock_out_at)
+        : null;
+
+    const adjIn = clock?.adjusted_clock_in_at ?? null;
+    const adjOut = clock?.adjusted_clock_out_at ?? null;
+    const adjMin = adjIn && adjOut ? minutesBetween(adjIn, adjOut) : null;
+
+    const rosterWorkMin = rosterMin !== null ? Math.max(0, rosterMin - breakMin) : 0;
+    const rawWorkMin = rawMin !== null ? Math.max(0, rawMin - breakMin) : null;
+    const adjWorkMin = adjMin !== null ? Math.max(0, adjMin - breakMin) : null;
+
+    if (isNoHourStatus(status)) {
+      return {
+        source: status,
+        payrollHours: 0,
+        pay: 0,
+      };
+    }
+
+    const leave = findPaidLeaveForRosterShift(shift);
+
+    if (leave) {
+      const rate = Number(payRateByStaff[shift.staff_id]?.weekday_rate ?? 0);
+      const payrollHours = round2(rosterWorkMin / 60);
+      const pay = round2(payrollHours * rate);
+
+      return {
+        source: "LEAVE",
+        payrollHours,
+        pay,
+      };
+    }
+
+    const payrollWorkMin = adjWorkMin ?? rawWorkMin ?? rosterWorkMin;
+    const source = adjWorkMin !== null ? "ADJUSTED" : rawWorkMin !== null ? "RAW" : "ROSTER";
+
+    const rate = Number(shift.applied_rate ?? 0);
+    const payrollHours = round2(payrollWorkMin / 60);
+    const pay = round2(payrollHours * rate);
+
+    return {
+      source,
+      payrollHours,
+      pay,
+    };
+  }
+
+  const actualPayrollRows = useMemo(() => {
+    return rows.map((shift) => {
+      const payroll = getActualPayrollForRosterShift(shift);
+
+      return {
+        shift,
+        payrollHours: payroll.payrollHours,
+        pay: payroll.pay,
+        source: payroll.source,
+      };
+    });
+  }, [rows, clocks, paidLeaveEvents, payRateByStaff]);
+
+  const dailyActualPayrollTotals = useMemo(() => {
+    const totals = Array.from({ length: 7 }, () => ({ hours: 0, pay: 0 }));
+
+    for (const r of actualPayrollRows) {
+      const idx = dayIndexFromISO(r.shift.shift_start);
+      totals[idx].hours += Number(r.payrollHours ?? 0);
+      totals[idx].pay += Number(r.pay ?? 0);
+    }
+
+    return totals.map((x) => ({
+      hours: round2(x.hours),
+      pay: round2(x.pay),
+    }));
+  }, [actualPayrollRows]);
+
+  const weekActualPayrollHours = useMemo(() => {
+    return round2(dailyActualPayrollTotals.reduce((sum, d) => sum + d.hours, 0));
+  }, [dailyActualPayrollTotals]);
+
+  const weekActualPayrollPay = useMemo(() => {
+    return round2(dailyActualPayrollTotals.reduce((sum, d) => sum + d.pay, 0));
+  }, [dailyActualPayrollTotals]);
+
+  const weekActualLabourNetPct =
+    weekTotalNetSales > 0 ? (weekActualPayrollPay / weekTotalNetSales) * 100 : null;
+
+  const weekLabourNetPct = weekTotalNetSales > 0 ? (storeTotalWage / weekTotalNetSales) * 100 : null;
 
   const weeklySummaryByStaff = useMemo(() => {
     const out: Record<string, { totalHours: number; wage: number }> = {};
@@ -2291,10 +2537,17 @@ export default function RosterWeek() {
               undefined,
               isPublished ? badge("PUBLISHED", "green") : badge("DRAFT", "yellow")
             )}
-            {statCard("Shift hours", `${storeTotalHours.toFixed(2)}h`, WAK_BLUE)}
-            {statCard("Shift wage", `$${storeTotalWage.toFixed(2)}`, WAK_RED)}
+            {statCard("Payroll hours", `${weekActualPayrollHours.toFixed(2)}h`, WAK_BLUE)}
+            {statCard("Actual payroll", fmtMoney(weekActualPayrollPay), WAK_RED)}
+            {statCard("Week net sales", weekTotalNetSales > 0 ? fmtMoney(weekTotalNetSales) : "No data", WAK_BLUE)}
+            {statCard(
+              "Actual Labour / Net Sales",
+              weekActualLabourNetPct !== null ? fmtPercent(weekActualLabourNetPct) : "—",
+              labourPctColor(weekActualLabourNetPct)
+            )}
           </div>
         </div>
+
 
         {msg && (
           <div
@@ -2413,10 +2666,32 @@ export default function RosterWeek() {
                           </div>
                         ) : null}
 
-                        <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                          Day total: <b style={{ color: TEXT }}>{dailyTotals[i].hours.toFixed(2)}h</b> |{" "}
-                          <b style={{ color: TEXT }}>${dailyTotals[i].wage.toFixed(2)}</b>
-                        </div>
+                        {(() => {
+                          const dayNetSales = Number(dailySalesByDate[dayISO] ?? 0);
+                          const actualPay = Number(dailyActualPayrollTotals[i]?.pay ?? 0);
+                          const actualHours = Number(dailyActualPayrollTotals[i]?.hours ?? 0);
+                          const actualLabourNetPct = dayNetSales > 0 ? (actualPay / dayNetSales) * 100 : null;
+
+                          return (
+                            <div style={{ fontSize: 12, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
+                              <div>
+                                Payroll hours: <b style={{ color: TEXT }}>{actualHours.toFixed(2)}h</b>
+                              </div>
+                              <div>
+                                Actual payroll: <b style={{ color: TEXT }}>{fmtMoney(actualPay)}</b>
+                              </div>
+                              <div>
+                                Net sales: <b style={{ color: TEXT }}>{dayNetSales > 0 ? fmtMoney(dayNetSales) : "No data"}</b>
+                              </div>
+                              <div>
+                                Actual Labour/Net:{" "}
+                                <b style={{ color: labourPctColor(actualLabourNetPct) }}>
+                                  {actualLabourNetPct !== null ? fmtPercent(actualLabourNetPct) : "—"}
+                                </b>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </th>
                     );
                   })}

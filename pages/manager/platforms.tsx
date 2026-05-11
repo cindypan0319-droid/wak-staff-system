@@ -278,7 +278,7 @@ export default function PlatformsPage() {
               <input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Uber Eats"
+                placeholder="UBER_EATS"
                 disabled={!isOwner}
                 style={inputStyle()}
               />
