@@ -108,6 +108,8 @@ const CARD_BG = "#FFFFFF";
 const BORDER = "#E5E7EB";
 const TEXT = "#111827";
 const MUTED = "#6B7280";
+const ESTIMATE_TEXT = "#7C3AED";
+const ESTIMATE_BG = "#F5F3FF";
 
 const SHIFT_BG = "#F7FBFF";
 const SHIFT_BORDER = "#D9E6F7";
@@ -639,6 +641,7 @@ export default function RosterWeek() {
   const [payRates, setPayRates] = useState<StaffPayRateRow[]>([]);
   const [clocks, setClocks] = useState<TimeClock[]>([]);
   const [dailySalesRows, setDailySalesRows] = useState<DailySalesTotalRow[]>([]);
+  const [salesEstimateRows, setSalesEstimateRows] = useState<DailySalesTotalRow[]>([]);
   const [msg, setMsg] = useState("");
 
   const [isPublished, setIsPublished] = useState<boolean>(false);
@@ -717,6 +720,28 @@ export default function RosterWeek() {
     }
 
     setDailySalesRows((r.data ?? []) as DailySalesTotalRow[]);
+  }
+
+  async function loadSalesEstimateHistory() {
+    const historyStart = addDaysISO(weekStart, -56);
+    const historyEnd = addDaysISO(weekStart, -1);
+
+    const r = await supabase
+      .from("daily_sales_totals")
+      .select("business_date, store_id, total_net")
+      .eq("store_id", storeId)
+      .gte("business_date", historyStart)
+      .lte("business_date", historyEnd)
+      .order("business_date", { ascending: true });
+
+    if (r.error) {
+      console.log(r.error);
+      setSalesEstimateRows([]);
+      setMsg("❌ Cannot load sales estimate history: " + r.error.message);
+      return;
+    }
+
+    setSalesEstimateRows((r.data ?? []) as DailySalesTotalRow[]);
   }
 
   async function loadPayRates() {
@@ -912,6 +937,7 @@ export default function RosterWeek() {
     await loadShiftCosts();
     await loadTimeClocks();
     await loadDailySalesTotals();
+    await loadSalesEstimateHistory();
     await loadOneOffUnavailability();
     await loadRecurringRules();
     await loadRecurringOverrides();
@@ -1195,6 +1221,7 @@ export default function RosterWeek() {
     loadShiftCosts();
     loadTimeClocks();
     loadDailySalesTotals();
+    loadSalesEstimateHistory();
     loadOneOffUnavailability();
     loadRecurringRules();
     loadRecurringOverrides();
@@ -1382,6 +1409,58 @@ export default function RosterWeek() {
 
     return map;
   }, [dailySalesRows]);
+
+  const estimatedSalesByDate = useMemo(() => {
+    const map: Record<string, number> = {};
+
+    for (const targetDay of dayDates) {
+      const targetISO = toISODate(targetDay);
+      const targetDow = targetDay.getDay();
+
+      const sameWeekdayValues = salesEstimateRows
+        .filter((r) => {
+          const d = new Date(r.business_date + "T00:00:00");
+          return d.getDay() === targetDow && Number(r.total_net ?? 0) > 0;
+        })
+        .map((r) => Number(r.total_net ?? 0));
+
+      if (sameWeekdayValues.length === 0) {
+        map[targetISO] = 0;
+        continue;
+      }
+
+      const avg = sameWeekdayValues.reduce((sum, x) => sum + x, 0) / sameWeekdayValues.length;
+
+      map[targetISO] = round2(avg);
+    }
+
+    return map;
+  }, [dayDates, salesEstimateRows]);
+
+  function getSalesForDay(dayISO: string) {
+    const actual = Number(dailySalesByDate[dayISO] ?? 0);
+
+    if (actual > 0) {
+      return {
+        value: actual,
+        source: "ACTUAL" as const,
+      };
+    }
+
+    const estimate = Number(estimatedSalesByDate[dayISO] ?? 0);
+
+    if (estimate > 0) {
+      return {
+        value: estimate,
+        source: "ESTIMATE" as const,
+      };
+    }
+
+    return {
+      value: 0,
+      source: "NONE" as const,
+    };
+  }
 
   const weekTotalNetSales = useMemo(() => {
     return dayDates.reduce((sum, d) => {
@@ -2667,7 +2746,8 @@ export default function RosterWeek() {
                         ) : null}
 
                         {(() => {
-                          const dayNetSales = Number(dailySalesByDate[dayISO] ?? 0);
+                          const salesInfo = getSalesForDay(dayISO);
+                          const dayNetSales = salesInfo.value;
                           const actualPay = Number(dailyActualPayrollTotals[i]?.pay ?? 0);
                           const actualHours = Number(dailyActualPayrollTotals[i]?.hours ?? 0);
                           const actualLabourNetPct = dayNetSales > 0 ? (actualPay / dayNetSales) * 100 : null;
@@ -2680,11 +2760,35 @@ export default function RosterWeek() {
                               <div>
                                 Actual payroll: <b style={{ color: TEXT }}>{fmtMoney(actualPay)}</b>
                               </div>
-                              <div>
-                                Net sales: <b style={{ color: TEXT }}>{dayNetSales > 0 ? fmtMoney(dayNetSales) : "No data"}</b>
+                              <div
+                                style={{
+                                  color: salesInfo.source === "ESTIMATE" ? ESTIMATE_TEXT : MUTED,
+                                  fontWeight: salesInfo.source === "ESTIMATE" ? 800 : 400,
+                                }}
+                              >
+                                {salesInfo.source === "ACTUAL"
+                                  ? "Net sales"
+                                  : salesInfo.source === "ESTIMATE"
+                                  ? "Est. net sales"
+                                  : "Net sales"}
+                                :{" "}
+                                <b style={{ color: salesInfo.source === "ESTIMATE" ? ESTIMATE_TEXT : TEXT }}>
+                                  {dayNetSales > 0 ? fmtMoney(dayNetSales) : "No data"}
+                                </b>
                               </div>
-                              <div>
-                                Actual Labour/Net:{" "}
+
+                              <div
+                                style={{
+                                  color: salesInfo.source === "ESTIMATE" ? ESTIMATE_TEXT : MUTED,
+                                  fontWeight: salesInfo.source === "ESTIMATE" ? 800 : 400,
+                                }}
+                              >
+                                {salesInfo.source === "ACTUAL"
+                                  ? "Actual Labour/Net"
+                                  : salesInfo.source === "ESTIMATE"
+                                  ? "Est. Labour/Net"
+                                  : "Actual Labour/Net"}
+                                :{" "}
                                 <b style={{ color: labourPctColor(actualLabourNetPct) }}>
                                   {actualLabourNetPct !== null ? fmtPercent(actualLabourNetPct) : "—"}
                                 </b>
