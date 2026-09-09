@@ -40,14 +40,14 @@ export default function AutoLogout() {
     }
   }
 
-  async function doLogout() {
+  async function doLogout(scope: "local" | "global") {
     try {
       clearLogoutTimer();
       clearSingleLoginInterval();
       enabledRef.current = false;
       roleRef.current = "ANON";
       localStorage.removeItem(SINGLE_LOGIN_STORAGE_KEY);
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope });
     } catch (e) {
       console.error("Auto logout error:", e);
     } finally {
@@ -65,7 +65,7 @@ export default function AutoLogout() {
     if (!timeout) return;
 
     timerRef.current = setTimeout(() => {
-      doLogout();
+      doLogout("local");
     }, timeout);
   }
 
@@ -76,7 +76,7 @@ export default function AutoLogout() {
 
       const localToken = localStorage.getItem(SINGLE_LOGIN_STORAGE_KEY);
       if (!localToken) {
-        await doLogout();
+        await doLogout("local");
         return;
       }
 
@@ -84,7 +84,7 @@ export default function AutoLogout() {
       const uid = userData.user?.id;
 
       if (!uid) {
-        await doLogout();
+        await doLogout("local");
         return;
       }
 
@@ -98,12 +98,12 @@ export default function AutoLogout() {
       const isActive = (p.data as any)?.is_active;
 
       if (isActive === false) {
-        await doLogout();
+        await doLogout("global");
         return;
       }
 
       if (!serverToken || serverToken !== localToken) {
-        await doLogout();
+        await doLogout("local");
       }
     } catch (e) {
       console.error("Single login check error:", e);
@@ -163,7 +163,7 @@ export default function AutoLogout() {
 
       // 单设备检查：本机 token 和数据库必须一致
       if (!localToken || !serverToken || localToken !== serverToken) {
-        await doLogout();
+        await doLogout("local");
         return;
       }
 

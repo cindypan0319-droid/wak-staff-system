@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
+import { createPinCredentials } from "../../../lib/server/authCredentials";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -29,13 +30,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const pr = await admin.from("profiles").select("role,is_active").eq("id", actorId).maybeSingle();
     if (pr.error) return res.status(400).json({ error: pr.error.message });
 
-    const actorRole = (pr.data as any)?.role;
-    const actorActive = (pr.data as any)?.is_active === true;
+    const actorRole = pr.data?.role;
+    const actorActive = pr.data?.is_active === true;
     if (!actorActive) return res.status(403).json({ error: "Your account is inactive" });
     if (!(actorRole === "OWNER" || actorRole === "MANAGER")) return res.status(403).json({ error: "Owner/Manager only" });
 
-    const { full_name, preferred_name, role } = req.body ?? {};
+    const { full_name, preferred_name, role, pin } = req.body ?? {};
     if (!full_name || !preferred_name || !role) return res.status(400).json({ error: "Missing fields" });
+
+    const pinWasSupplied = pin !== undefined && pin !== null;
+    const pinStr = pinWasSupplied ? String(pin) : "";
+    if (pinWasSupplied && !/^\d{4}$/.test(pinStr)) {
+      return res.status(400).json({ error: "PIN must be exactly 4 numeric digits" });
+    }
 
     const newRole = String(role).toUpperCase();
     if (!["STAFF", "MANAGER", "OWNER"].includes(newRole)) return res.status(400).json({ error: "Invalid role" });
@@ -60,6 +67,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const newId = created.data.user?.id;
     if (!newId) return res.status(400).json({ error: "User id missing" });
 
+    const pinCredentials = pinStr ? createPinCredentials(pinStr) : {};
+
     const up = await admin.from("profiles").upsert(
       {
         id: newId,
@@ -67,17 +76,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         preferred_name: String(preferred_name),
         role: newRole,
         is_active: true,
+        ...pinCredentials,
       },
-      { onConflict: "id" } as any
+      { onConflict: "id" }
     );
 
     if (up.error) return res.status(400).json({ error: up.error.message });
 
     // optional: create employee_details empty row if you use it
-    await admin.from("employee_details").upsert({ staff_id: newId }, { onConflict: "staff_id" } as any);
+    await admin.from("employee_details").upsert({ staff_id: newId }, { onConflict: "staff_id" });
 
     return res.status(200).json({ ok: true, staff_id: newId });
-  } catch (e: any) {
-    return res.status(500).json({ error: e.message ?? "Server error" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Server error";
+    return res.status(500).json({ error: message });
   }
 }

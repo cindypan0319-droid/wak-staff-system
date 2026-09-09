@@ -37,7 +37,7 @@ export default function App({ Component, pageProps }: AppProps) {
 
         // If deactivated -> sign out + redirect
         if (isActive === false) {
-          await supabase.auth.signOut();
+          await supabase.auth.signOut({ scope: "global" });
           window.location.href = "/";
           return;
         }

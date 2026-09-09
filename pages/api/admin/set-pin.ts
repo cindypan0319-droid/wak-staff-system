@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
-import crypto from "crypto";
+import { createPinCredentials } from "../../../lib/server/authCredentials";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -8,10 +8,6 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
-
-function hashPin(pin: string, salt: string) {
-  return crypto.createHash("sha256").update(`${salt}:${pin}`).digest("hex");
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -28,8 +24,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const actor = await admin.from("profiles").select("role, is_active").eq("id", actorId).maybeSingle();
     if (actor.error) return res.status(400).json({ error: actor.error.message });
 
-    const actorRole = (actor.data as any)?.role;
-    const actorActive = (actor.data as any)?.is_active === true;
+    const actorRole = actor.data?.role;
+    const actorActive = actor.data?.is_active === true;
 
     if (!actorActive) return res.status(403).json({ error: "Your account is inactive" });
     if (!(actorRole === "OWNER" || actorRole === "MANAGER")) return res.status(403).json({ error: "Owner/Manager only" });
@@ -38,23 +34,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!staff_id || pin === undefined || pin === null) return res.status(400).json({ error: "Missing staff_id or pin" });
 
     const pinStr = String(pin);
-    if (pinStr.length < 1) return res.status(400).json({ error: "PIN cannot be empty" });
+    if (!/^\d{4}$/.test(pinStr)) {
+      return res.status(400).json({ error: "PIN must be exactly 4 numeric digits" });
+    }
 
     // Manager cannot change OWNER
     if (actorRole === "MANAGER") {
       const target = await admin.from("profiles").select("role").eq("id", staff_id).maybeSingle();
-      const targetRole = (target.data as any)?.role;
+      const targetRole = target.data?.role;
       if (targetRole === "OWNER") return res.status(403).json({ error: "Manager cannot change OWNER PIN" });
     }
 
-    const salt = crypto.randomBytes(16).toString("hex");
-    const pin_hash = hashPin(pinStr, salt);
+    const pinCredentials = createPinCredentials(pinStr);
 
-    const up = await admin.from("profiles").update({ pin_salt: salt, pin_hash }).eq("id", staff_id);
+    const up = await admin.from("profiles").update(pinCredentials).eq("id", staff_id);
     if (up.error) return res.status(400).json({ error: up.error.message });
 
     return res.status(200).json({ ok: true });
-  } catch (e: any) {
-    return res.status(500).json({ error: e.message ?? "Server error" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Server error";
+    return res.status(500).json({ error: message });
   }
 }

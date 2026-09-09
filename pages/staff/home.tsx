@@ -232,7 +232,7 @@ export default function StaffHomePage() {
 
     try {
       localStorage.removeItem(SINGLE_LOGIN_STORAGE_KEY);
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       window.location.href = "/";
     } finally {
       setLoading(false);

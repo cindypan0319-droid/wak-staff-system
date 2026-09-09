@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { supabase } from "../lib/supabaseClient";
 
 type Profile = {
@@ -38,7 +39,7 @@ export default function AdminPinPage() {
       return;
     }
 
-    const rows = (r.data ?? []) as any as Profile[];
+    const rows = (r.data ?? []) as Profile[];
     setProfiles(rows);
     if (!staffId && rows.length) setStaffId(rows[0].id);
   }
@@ -60,7 +61,7 @@ export default function AdminPinPage() {
       const accessToken = data.session?.access_token;
       if (!accessToken) return setMsg("❌ No session. Please login via /admin-login first.");
 
-      const resp = await fetch("/api/admin/set-pin2", {
+      const resp = await fetch("/api/admin/set-pin", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -124,7 +125,7 @@ export default function AdminPinPage() {
       </div>
 
       <p style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-        If you see “No session”, please login first: <a href="/admin-login">/admin-login</a>
+        If you see “No session”, please login first: <Link href="/admin-login">/admin-login</Link>
       </p>
     </div>
   );
