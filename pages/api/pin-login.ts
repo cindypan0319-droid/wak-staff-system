@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
-import crypto from "crypto";
+import { generateSingleLoginToken, hashPin } from "../../lib/server/authCredentials";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -9,14 +9,6 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
-
-function hashPin(pin: string, salt: string) {
-  return crypto.createHash("sha256").update(`${salt}:${pin}`).digest("hex");
-}
-
-function generateLoginToken() {
-  return crypto.randomBytes(32).toString("hex");
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
@@ -29,7 +21,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { staff_id, pin } = req.body ?? {};
-    console.log("pin-login start:", { staff_id });
 
     if (!staff_id || pin === undefined || pin === null) {
       return res.status(400).json({ error: "Missing staff_id or pin" });
@@ -42,8 +33,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .select("id, is_active, pin_hash, pin_salt")
       .eq("id", staff_id)
       .single();
-
-    console.log("profile result:", p);
 
     if (p.error) return res.status(400).json({ error: p.error.message });
     if (!p.data) return res.status(404).json({ error: "Profile not found" });
@@ -63,15 +52,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const u = await admin.auth.admin.getUserById(staff_id);
-    console.log("auth user result:", u);
 
     const email = u.data?.user?.email;
     if (!email) {
       return res.status(400).json({ error: "User email not found" });
     }
 
-    const loginToken = generateLoginToken();
-    console.log("generated token:", loginToken);
+    const loginToken = generateSingleLoginToken();
 
     const updateToken = await admin
       .from("profiles")
@@ -79,8 +66,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("id", staff_id)
       .select("id, single_login_token")
       .single();
-
-    console.log("updateToken result:", updateToken);
 
     if (updateToken.error) {
       return res.status(400).json({ error: "Update token failed: " + updateToken.error.message });
@@ -94,8 +79,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       loginToken
     )}`;
 
-    console.log("redirectTo:", redirectTo);
-
     const link = await admin.auth.admin.generateLink({
       type: "magiclink",
       email,
@@ -103,8 +86,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         redirectTo,
       },
     });
-
-    console.log("generateLink result:", link);
 
     if (link.error) return res.status(400).json({ error: link.error.message });
 
@@ -116,10 +97,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       ok: true,
       action_link,
-      debug_token_saved: updateToken.data.single_login_token,
     });
-  } catch (e: any) {
-    console.error("pin-login fatal error:", e);
-    return res.status(500).json({ error: e.message ?? "Server error" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Server error";
+    return res.status(500).json({ error: message });
   }
 }

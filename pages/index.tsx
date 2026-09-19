@@ -41,11 +41,11 @@ export default function Home() {
       const { data: userData, error } = await supabase.auth.getUser();
 
       if (error || !userData.user) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
       }
     } catch {
       try {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
       } catch {
         // ignore
       }
