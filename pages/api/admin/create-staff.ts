@@ -1,11 +1,34 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
+import crypto from "crypto";
 import { createPinCredentials } from "../../../lib/server/authCredentials";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+
+async function rollbackCreatedAuthUser(userId: string) {
+  try {
+    const deleted = await admin.auth.admin.deleteUser(userId);
+
+    if (deleted.error) {
+      console.error("Failed to roll back newly created Auth user", {
+        userId,
+        error: deleted.error.message,
+      });
+      return false;
+    }
+
+    return true;
+  } catch (error: unknown) {
+    console.error("Failed to roll back newly created Auth user", {
+      userId,
+      error: error instanceof Error ? error.message : "Unknown cleanup error",
+    });
+    return false;
+  }
+}
 
 function safeSlug(s: string) {
   return String(s || "")
@@ -17,6 +40,9 @@ function safeSlug(s: string) {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  let createdAuthUserId: string | null = null;
+  let profileCreated = false;
 
   try {
     const authHeader = req.headers.authorization || "";
@@ -54,11 +80,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const base = safeSlug(preferred_name || full_name);
     const fakeEmail = `${base}-${Date.now()}@wok.local`;
+    const generatedPassword = crypto.randomBytes(32).toString("base64url");
 
-    // Create auth user (password can be anything, we don't use it for PIN anymore)
     const created = await admin.auth.admin.createUser({
       email: fakeEmail,
-      password: "TempPass123!", // never shown to staff
+      password: generatedPassword,
       email_confirm: true,
     });
 
@@ -66,6 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const newId = created.data.user?.id;
     if (!newId) return res.status(400).json({ error: "User id missing" });
+    createdAuthUserId = newId;
 
     const pinCredentials = pinStr ? createPinCredentials(pinStr) : {};
 
@@ -81,13 +108,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { onConflict: "id" }
     );
 
-    if (up.error) return res.status(400).json({ error: up.error.message });
+    if (up.error) {
+      console.error("Failed to create profile for newly created Auth user", {
+        userId: newId,
+        error: up.error.message,
+      });
 
-    // optional: create employee_details empty row if you use it
-    await admin.from("employee_details").upsert({ staff_id: newId }, { onConflict: "staff_id" });
+      const rolledBack = await rollbackCreatedAuthUser(newId);
+      if (!rolledBack) {
+        return res.status(500).json({
+          error: "Staff creation failed and automatic cleanup was unsuccessful. Manual cleanup is required.",
+        });
+      }
+
+      return res.status(400).json({ error: "Failed to create staff profile" });
+    }
+
+    profileCreated = true;
+
+    try {
+      const details = await admin
+        .from("employee_details")
+        .upsert({ staff_id: newId }, { onConflict: "staff_id" });
+
+      if (details.error) {
+        console.error("Optional employee_details initialization failed", {
+          userId: newId,
+          error: details.error.message,
+        });
+      }
+    } catch (error: unknown) {
+      console.error("Optional employee_details initialization failed", {
+        userId: newId,
+        error: error instanceof Error ? error.message : "Unknown employee details error",
+      });
+    }
 
     return res.status(200).json({ ok: true, staff_id: newId });
   } catch (error: unknown) {
+    if (createdAuthUserId && !profileCreated) {
+      const rolledBack = await rollbackCreatedAuthUser(createdAuthUserId);
+      if (!rolledBack) {
+        return res.status(500).json({
+          error: "Staff creation failed and automatic cleanup was unsuccessful. Manual cleanup is required.",
+        });
+      }
+    }
+
     const message = error instanceof Error ? error.message : "Server error";
     return res.status(500).json({ error: message });
   }
