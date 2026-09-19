@@ -249,8 +249,7 @@ export default function MyRosterNextWeek() {
   async function loadProfiles() {
     const r = await supabase
       .from("profiles")
-      .select("id, full_name, preferred_name")
-      .eq("is_active", true);
+      .select("id, full_name, preferred_name");
 
     if (!r.error) {
       setProfiles((r.data ?? []) as ProfileRow[]);

@@ -5,6 +5,7 @@ type Profile = {
   id: string;
   full_name: string | null;
   preferred_name: string | null;
+  is_active: boolean | null;
 };
 
 type ShiftStatus = "SCHEDULED" | "WORKED" | "ABSENT" | "SICK" | "COVERED" | "CANCELLED";
@@ -653,6 +654,7 @@ export default function RosterWeek() {
   const [drawerTab, setDrawerTab] = useState<"shift" | "unavail" | "leave">("shift");
   const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
   const [drawerStaffId, setDrawerStaffId] = useState<string>("");
+  const [drawerReassignStaffId, setDrawerReassignStaffId] = useState<string>("");
   const [drawerDayIdx, setDrawerDayIdx] = useState<number>(0);
   const [drawerShiftId, setDrawerShiftId] = useState<number | null>(null);
 
@@ -669,6 +671,30 @@ export default function RosterWeek() {
     const preferred = p?.preferred_name?.trim() ?? "";
     const full = p?.full_name?.trim() ?? "";
     return preferred || full || id.slice(0, 8);
+  }
+
+  function isStaffActive(id: string) {
+    return profiles.find((profile) => profile.id === id)?.is_active === true;
+  }
+
+  async function confirmStaffStillActive(staffId: string) {
+    const result = await supabase
+      .from("profiles")
+      .select("is_active")
+      .eq("id", staffId)
+      .maybeSingle();
+
+    if (result.error) {
+      setMsg("❌ Could not confirm employee status: " + result.error.message);
+      return false;
+    }
+
+    if (result.data?.is_active !== true) {
+      setMsg("❌ This employee is inactive and cannot receive new workforce records.");
+      return false;
+    }
+
+    return true;
   }
 
   async function getHourlyRateForShift(staffId: string, shiftStartISO: string): Promise<number> {
@@ -694,7 +720,7 @@ export default function RosterWeek() {
   }
 
   async function loadProfiles() {
-    const p = await supabase.from("profiles").select("id, full_name, preferred_name");
+    const p = await supabase.from("profiles").select("id, full_name, preferred_name, is_active");
     if (p.error) {
       console.log(p.error);
       setProfiles([]);
@@ -992,6 +1018,22 @@ export default function RosterWeek() {
       return { ok: false, reason: "SOURCE_EMPTY" as const };
     }
 
+    const sourceStaffIds = Array.from(new Set(sourceShifts.map((shift) => shift.staff_id)));
+    const activeProfilesResult = await supabase
+      .from("profiles")
+      .select("id, is_active")
+      .in("id", sourceStaffIds);
+
+    if (activeProfilesResult.error) throw activeProfilesResult.error;
+
+    const activeStaffIds = new Set(
+      (activeProfilesResult.data ?? [])
+        .filter((profile) => profile.is_active === true)
+        .map((profile) => profile.id as string)
+    );
+    const copyableShifts = sourceShifts.filter((shift) => activeStaffIds.has(shift.staff_id));
+    const skippedInactive = sourceShifts.length - copyableShifts.length;
+
     const { data: userData } = await supabase.auth.getUser();
     const uid = userData.user?.id ?? null;
 
@@ -999,7 +1041,7 @@ export default function RosterWeek() {
     const targetDate = new Date(targetWeekStartISO + "T00:00:00");
     const diffDays = Math.round((targetDate.getTime() - sourceDate.getTime()) / (1000 * 60 * 60 * 24));
 
-    const insertRows = sourceShifts.map((s) => ({
+    const insertRows = copyableShifts.map((s) => ({
       store_id: s.store_id,
       staff_id: s.staff_id,
       shift_start: shiftISOByDays(s.shift_start, diffDays),
@@ -1009,10 +1051,12 @@ export default function RosterWeek() {
       created_by: uid,
     }));
 
-    const ins = await supabase.from("shifts").insert(insertRows, { returning: "minimal" } as any);
-    if (ins.error) throw ins.error;
+    if (insertRows.length > 0) {
+      const ins = await supabase.from("shifts").insert(insertRows, { returning: "minimal" } as any);
+      if (ins.error) throw ins.error;
+    }
 
-    return { ok: true, count: insertRows.length };
+    return { ok: true, count: insertRows.length, skippedInactive };
   }
 
   async function applyLatestRatesForWeek() {
@@ -1117,7 +1161,13 @@ export default function RosterWeek() {
         const result = await copyWeekShifts(weekStart, nextWeek);
 
         if (result.ok) {
-          setMsg(`✅ Copied ${result.count} shift(s) to next week.`);
+          setMsg(
+            `✅ Copied ${result.count} shift(s) to next week.${
+              (result.skippedInactive ?? 0) > 0
+                ? ` Skipped ${result.skippedInactive ?? 0} shift(s) because the employee is inactive.`
+                : ""
+            }`
+          );
         } else if (result.reason === "SOURCE_EMPTY") {
           setMsg("ℹ️ Current week has no shifts, so next week stays empty.");
         }
@@ -1146,7 +1196,13 @@ export default function RosterWeek() {
       const result = await copyWeekShifts(prevWeek, weekStart);
 
       if (result.ok) {
-        setMsg(`✅ Copied ${result.count} shift(s) from previous week.`);
+        setMsg(
+          `✅ Copied ${result.count} shift(s) from previous week.${
+            (result.skippedInactive ?? 0) > 0
+              ? ` Skipped ${result.skippedInactive ?? 0} shift(s) because the employee is inactive.`
+              : ""
+          }`
+        );
         await loadShiftCosts();
       } else if (result.reason === "SOURCE_EMPTY") {
         setMsg("ℹ️ Previous week has no shifts to copy.");
@@ -1236,14 +1292,23 @@ export default function RosterWeek() {
     return map;
   }, [payRates]);
 
+  const activeProfiles = useMemo(() => profiles.filter((profile) => profile.is_active === true), [profiles]);
+
+  const skippedRuleIds = useMemo(() => new Set<number>(recOverrides.map((x) => x.rule_id)), [recOverrides]);
+
   const staffIds = useMemo(() => {
     const set = new Set<string>();
-    profiles.forEach((p) => set.add(p.id));
-    rows.forEach((r) => set.add(r.staff_id));
+    activeProfiles.forEach((profile) => set.add(profile.id));
+    rows.forEach((r) => {
+      set.add(r.staff_id);
+      if (r.covered_by_staff_id) set.add(r.covered_by_staff_id);
+    });
     oneOff.forEach((u) => set.add(u.staff_id));
-    recRules.forEach((u) => set.add(u.staff_id));
+    recRules.forEach((rule) => {
+      if (!skippedRuleIds.has(rule.id)) set.add(rule.staff_id);
+    });
     return Array.from(set).sort((a, b) => staffName(a).localeCompare(staffName(b)));
-  }, [profiles, rows, oneOff, recRules]);
+  }, [activeProfiles, rows, oneOff, recRules, skippedRuleIds]);
 
   const grid = useMemo(() => {
     const g: Record<string, ShiftCostRow[][]> = {};
@@ -1255,8 +1320,6 @@ export default function RosterWeek() {
     });
     return g;
   }, [rows, staffIds]);
-
-  const skippedRuleIds = useMemo(() => new Set<number>(recOverrides.map((x) => x.rule_id)), [recOverrides]);
 
   function cellDayIdxToJsDow(dayIdx: number) {
     return [4, 5, 6, 0, 1, 2, 3][dayIdx];
@@ -1649,7 +1712,13 @@ export default function RosterWeek() {
   }
 
   function openDrawerFromCell(staffId: string, dayIdx: number) {
+    if (!isStaffActive(staffId)) {
+      setMsg("❌ Inactive employees cannot receive new shifts or availability records.");
+      return;
+    }
+
     setDrawerStaffId(staffId);
+    setDrawerReassignStaffId(staffId);
     setDrawerDayIdx(dayIdx);
 
     setDrawerTab("shift");
@@ -1671,6 +1740,7 @@ export default function RosterWeek() {
     const dayIdx = dayIndexFromISO(r.shift_start);
 
     setDrawerStaffId(r.staff_id);
+    setDrawerReassignStaffId(r.staff_id);
     setDrawerDayIdx(dayIdx);
 
     setDrawerTab("shift");
@@ -1690,6 +1760,7 @@ export default function RosterWeek() {
 
   function openDrawerForUnavailable(staffId: string, dayIdx: number) {
     setDrawerStaffId(staffId);
+    setDrawerReassignStaffId(staffId);
     setDrawerDayIdx(dayIdx);
 
     setDrawerTab("unavail");
@@ -1706,6 +1777,7 @@ export default function RosterWeek() {
 
   function openDrawerForLeave(staffId: string, dayIdx: number) {
     setDrawerStaffId(staffId);
+    setDrawerReassignStaffId(staffId);
     setDrawerDayIdx(dayIdx);
 
     setDrawerTab("leave");
@@ -1722,6 +1794,7 @@ export default function RosterWeek() {
   }
 
   const drawerDayDate = useMemo(() => dayDates[drawerDayIdx], [dayDates, drawerDayIdx]);
+  const drawerStaffActive = drawerStaffId ? isStaffActive(drawerStaffId) : false;
 
   const drawerDayEvents = useMemo(() => {
     if (!drawerStaffId) return [];
@@ -1788,6 +1861,10 @@ export default function RosterWeek() {
       return;
     }
 
+    const targetStaffId = drawerMode === "edit" ? drawerReassignStaffId || drawerStaffId : drawerStaffId;
+    const isNewAssignment = drawerMode === "add" || targetStaffId !== drawerStaffId;
+    if (isNewAssignment && !(await confirmStaffStillActive(targetStaffId))) return;
+
     const startISO = buildISOFromDayAndTime(drawerDayDate, drawerStartTime);
     let endISO = buildISOFromDayAndTime(drawerDayDate, drawerEndTime);
 
@@ -1797,14 +1874,14 @@ export default function RosterWeek() {
       endISO = end.toISOString();
     }
 
-    warnIfUnavailable(drawerStaffId, startISO, endISO);
+    warnIfUnavailable(targetStaffId, startISO, endISO);
 
     const { data: userData } = await supabase.auth.getUser();
     const uid = userData.user?.id ?? null;
 
     let hourlyRate = 0;
     try {
-      hourlyRate = await getHourlyRateForShift(drawerStaffId, startISO);
+      hourlyRate = await getHourlyRateForShift(targetStaffId, startISO);
     } catch (e: any) {
       setMsg("❌ " + (e?.message ?? "Could not determine hourly rate."));
       return;
@@ -1815,7 +1892,7 @@ export default function RosterWeek() {
         [
           {
             store_id: storeId,
-            staff_id: drawerStaffId,
+            staff_id: targetStaffId,
             shift_start: startISO,
             shift_end: endISO,
             break_minutes: 0,
@@ -1845,6 +1922,7 @@ export default function RosterWeek() {
     const up = await supabase
       .from("shifts")
       .update({
+        staff_id: targetStaffId,
         shift_start: startISO,
         shift_end: endISO,
         break_minutes: 0,
@@ -1897,6 +1975,8 @@ export default function RosterWeek() {
       setMsg("❌ Please fill start/end time.");
       return;
     }
+
+    if (!(await confirmStaffStillActive(drawerStaffId))) return;
 
     const jsDow = cellDayIdxToJsDow(drawerDayIdx);
 
@@ -2000,6 +2080,8 @@ export default function RosterWeek() {
       setMsg("❌ Please fill start/end time.");
       return;
     }
+
+    if (!(await confirmStaffStillActive(drawerStaffId))) return;
 
     const startISO = buildISOFromDayAndTime(drawerDayDate, unStartTime);
     let endISO = buildISOFromDayAndTime(drawerDayDate, unEndTime);
@@ -2160,7 +2242,10 @@ export default function RosterWeek() {
           }}
         >
           <div>
-            <b>Staff:</b> {drawerStaffId ? staffName(drawerStaffId) : "—"}
+            <b>Staff:</b> {drawerStaffId ? staffName(drawerStaffId) : "—"}{" "}
+            {drawerStaffId && !drawerStaffActive ? (
+              <span style={{ color: "#991B1B", fontSize: 11, fontWeight: 900 }}>INACTIVE</span>
+            ) : null}
           </div>
           <div>
             <b>Date:</b> {drawerDayDate ? fmtHeaderDate(drawerDayDate) : "—"}
@@ -2171,6 +2256,23 @@ export default function RosterWeek() {
             </div>
           ) : null}
         </div>
+
+        {drawerStaffId && !drawerStaffActive ? (
+          <div
+            style={{
+              marginBottom: 14,
+              padding: "10px 12px",
+              border: "1px solid #FCA5A5",
+              borderRadius: 10,
+              background: "#FEF2F2",
+              color: "#991B1B",
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            Existing records can be managed, but new shifts, availability, and leave cannot be created for an inactive employee.
+          </div>
+        ) : null}
 
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <button
@@ -2222,6 +2324,26 @@ export default function RosterWeek() {
               Mode: <b>{drawerMode === "add" ? "ADD" : "EDIT"}</b>
             </div>
 
+            {drawerMode === "edit" ? (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Assigned employee</div>
+                <select
+                  value={drawerReassignStaffId}
+                  onChange={(e) => setDrawerReassignStaffId(e.target.value)}
+                  style={inputStyle("100%")}
+                >
+                  {!drawerStaffActive ? (
+                    <option value={drawerStaffId}>{staffName(drawerStaffId)} (INACTIVE)</option>
+                  ) : null}
+                  {activeProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {staffName(profile.id)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 12, marginBottom: 4, color: MUTED }}>Start (24h)</div>
               <input
@@ -2249,6 +2371,7 @@ export default function RosterWeek() {
               <div style={{ flex: 1 }}>
                 {actionButton(drawerMode === "add" ? "Save Shift" : "Save Changes", saveShiftFromDrawer, {
                   primary: true,
+                  disabled: drawerMode === "add" && !drawerStaffActive,
                 })}
               </div>
               {drawerMode === "edit" ? actionButton("Delete", deleteShiftFromDrawer, { danger: true }) : null}
@@ -2384,7 +2507,10 @@ export default function RosterWeek() {
                 />
               </div>
 
-              {actionButton("Save weekly unavailable", saveAddUnavailRecurringFromDrawer, { primary: true })}
+              {actionButton("Save weekly unavailable", saveAddUnavailRecurringFromDrawer, {
+                primary: true,
+                disabled: !drawerStaffActive,
+              })}
             </div>
           </div>
         ) : null}
@@ -2499,7 +2625,10 @@ export default function RosterWeek() {
                 />
               </div>
 
-              {actionButton("Save Leave", saveAddLeaveFromDrawer, { primary: true })}
+              {actionButton("Save Leave", saveAddLeaveFromDrawer, {
+                primary: true,
+                disabled: !drawerStaffActive,
+              })}
             </div>
           </div>
         ) : null}
@@ -2837,6 +2966,23 @@ export default function RosterWeek() {
                       }}
                     >
                       <div style={{ fontWeight: 900, color: TEXT }}>{staffName(sid)}</div>
+                      {!isStaffActive(sid) ? (
+                        <div
+                          style={{
+                            display: "inline-block",
+                            marginTop: 6,
+                            padding: "3px 7px",
+                            borderRadius: 999,
+                            background: "#FEE2E2",
+                            color: "#991B1B",
+                            fontSize: 10,
+                            fontWeight: 900,
+                            letterSpacing: 0.4,
+                          }}
+                        >
+                          INACTIVE
+                        </div>
+                      ) : null}
                     </td>
 
                     {Array.from({ length: 7 }, (_, dayIdx) => {
@@ -2866,7 +3012,7 @@ export default function RosterWeek() {
                             padding: 10,
                             verticalAlign: "top",
                             background: hasActiveUnav ? "#FFF8F8" : holidayLabel ? "#FFFDF5" : "#fff",
-                            cursor: "pointer",
+                            cursor: isStaffActive(sid) ? "pointer" : "default",
                           }}
                         >
                           {holidayLabel && (
