@@ -61,8 +61,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!actorActive) return res.status(403).json({ error: "Your account is inactive" });
     if (!(actorRole === "OWNER" || actorRole === "MANAGER")) return res.status(403).json({ error: "Owner/Manager only" });
 
-    const { full_name, preferred_name, role, pin } = req.body ?? {};
-    if (!full_name || !preferred_name || !role) return res.status(400).json({ error: "Missing fields" });
+    const { full_name, preferred_name, role, pin, is_active } = req.body ?? {};
+    const fullName = String(full_name ?? "").trim();
+    const preferredName = String(preferred_name ?? "").trim();
+
+    if (!fullName || !role) return res.status(400).json({ error: "Missing fields" });
+    if (is_active !== undefined && typeof is_active !== "boolean") {
+      return res.status(400).json({ error: "is_active must be a boolean" });
+    }
 
     const pinWasSupplied = pin !== undefined && pin !== null;
     const pinStr = pinWasSupplied ? String(pin) : "";
@@ -78,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: "Manager cannot create OWNER" });
     }
 
-    const base = safeSlug(preferred_name || full_name);
+    const base = safeSlug(preferredName || fullName);
     const fakeEmail = `${base}-${Date.now()}@wok.local`;
     const generatedPassword = crypto.randomBytes(32).toString("base64url");
 
@@ -99,10 +105,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const up = await admin.from("profiles").upsert(
       {
         id: newId,
-        full_name: String(full_name),
-        preferred_name: String(preferred_name),
+        full_name: fullName,
+        preferred_name: preferredName || null,
         role: newRole,
-        is_active: true,
+        is_active: is_active ?? true,
         ...pinCredentials,
       },
       { onConflict: "id" }
