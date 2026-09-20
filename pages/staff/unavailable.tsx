@@ -94,6 +94,22 @@ export default function StaffUnavailablePage() {
       return;
     }
 
+    const profileStatus = await supabase
+      .from("profiles")
+      .select("is_active")
+      .eq("id", uid)
+      .maybeSingle();
+
+    if (profileStatus.error) {
+      setMsg("❌ Could not confirm your employee status: " + profileStatus.error.message);
+      return;
+    }
+
+    if (profileStatus.data?.is_active !== true) {
+      setMsg("❌ Your employee profile is inactive. New availability cannot be submitted.");
+      return;
+    }
+
     const ins = await supabase.from("staff_unavailability").insert(
       [
         {

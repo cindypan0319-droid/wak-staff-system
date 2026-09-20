@@ -17,6 +17,8 @@ type RateRow = {
   holiday_rate: number;
 };
 
+type StatusFilter = "ACTIVE" | "INACTIVE" | "ALL";
+
 const DEFAULT_STORE_ID = "MOOROOLBARK";
 
 const WAK_BLUE = "#1E5A9E";
@@ -104,6 +106,7 @@ export default function PayRatesPage() {
 
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [rates, setRates] = useState<RateRow[]>([]);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ACTIVE");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -155,11 +158,7 @@ export default function PayRatesPage() {
       return;
     }
 
-    const activeProfiles = (p.data ?? []).filter(
-      (x: any) => x?.is_active === undefined || x?.is_active === null || x?.is_active === true
-    );
-
-    setProfiles(activeProfiles as any);
+    setProfiles((p.data ?? []) as Profile[]);
 
     const r = await supabase
       .from("staff_pay_rates")
@@ -238,6 +237,11 @@ export default function PayRatesPage() {
   async function save(staffId: string) {
     setMsg("");
 
+    if (profileById[staffId]?.is_active !== true) {
+      setMsg("❌ Inactive employee rates are read-only.");
+      return;
+    }
+
     const row = getRate(staffId);
     if (!row) {
       setMsg("❌ No local row to save.");
@@ -268,8 +272,14 @@ export default function PayRatesPage() {
     await load();
   }
 
-  const activeStaffCount = profiles.length;
-  const configuredCount = profiles.filter((p) => !!getRate(p.id)).length;
+  const filteredProfiles = useMemo(() => {
+    if (statusFilter === "ACTIVE") return profiles.filter((profile) => profile.is_active === true);
+    if (statusFilter === "INACTIVE") return profiles.filter((profile) => profile.is_active !== true);
+    return profiles;
+  }, [profiles, statusFilter]);
+
+  const activeStaffCount = profiles.filter((profile) => profile.is_active === true).length;
+  const configuredCount = profiles.filter((profile) => !!getRate(profile.id)).length;
 
   if (authLoading) {
     return (
@@ -405,6 +415,18 @@ export default function PayRatesPage() {
         >
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             {actionButton("Refresh", load, { primary: true, disabled: loading })}
+            {actionButton("Active", () => setStatusFilter("ACTIVE"), {
+              primary: statusFilter === "ACTIVE",
+              disabled: loading,
+            })}
+            {actionButton("Inactive", () => setStatusFilter("INACTIVE"), {
+              primary: statusFilter === "INACTIVE",
+              disabled: loading,
+            })}
+            {actionButton("All", () => setStatusFilter("ALL"), {
+              primary: statusFilter === "ALL",
+              disabled: loading,
+            })}
             {loading && <span style={{ color: MUTED, fontWeight: 700 }}>Loading...</span>}
           </div>
         </div>
@@ -435,6 +457,9 @@ export default function PayRatesPage() {
         >
           <div style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Staff Rates</h2>
+            <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>
+              Inactive employee rates are retained for audit and shown as read-only.
+            </div>
           </div>
 
           <div style={{ overflowX: "auto" }}>
@@ -476,7 +501,7 @@ export default function PayRatesPage() {
               </thead>
 
               <tbody>
-                {profiles.map((p) => {
+                {filteredProfiles.map((p) => {
                   const r = getRate(p.id) ?? {
                     staff_id: p.id,
                     store_id: DEFAULT_STORE_ID,
@@ -485,9 +510,10 @@ export default function PayRatesPage() {
                     sunday_rate: 0,
                     holiday_rate: 0,
                   };
+                  const isActive = p.is_active === true;
 
                   return (
-                    <tr key={p.id}>
+                    <tr key={p.id} style={{ background: isActive ? "#fff" : "#F9FAFB" }}>
                       <td
                         style={{
                           padding: "14px 12px",
@@ -498,6 +524,23 @@ export default function PayRatesPage() {
                         }}
                       >
                         {nameOf(p.id)}
+                        {!isActive ? (
+                          <div
+                            style={{
+                              display: "inline-block",
+                              marginLeft: 8,
+                              padding: "3px 7px",
+                              borderRadius: 999,
+                              background: "#FEE2E2",
+                              color: "#991B1B",
+                              fontSize: 10,
+                              fontWeight: 900,
+                              letterSpacing: 0.4,
+                            }}
+                          >
+                            INACTIVE
+                          </div>
+                        ) : null}
                       </td>
 
                       <td style={{ padding: "14px 12px", borderBottom: `1px solid ${BORDER}` }}>
@@ -506,10 +549,11 @@ export default function PayRatesPage() {
                           step="0.01"
                           min="0"
                           value={r.weekday_rate}
+                          disabled={!isActive}
                           onChange={(e) =>
                             setLocalRate(p.id, { weekday_rate: Number(e.target.value) })
                           }
-                          style={inputStyle(140)}
+                          style={inputStyle(140, !isActive)}
                         />
                       </td>
 
@@ -519,10 +563,11 @@ export default function PayRatesPage() {
                           step="0.01"
                           min="0"
                           value={r.saturday_rate}
+                          disabled={!isActive}
                           onChange={(e) =>
                             setLocalRate(p.id, { saturday_rate: Number(e.target.value) })
                           }
-                          style={inputStyle(140)}
+                          style={inputStyle(140, !isActive)}
                         />
                       </td>
 
@@ -532,10 +577,11 @@ export default function PayRatesPage() {
                           step="0.01"
                           min="0"
                           value={r.sunday_rate}
+                          disabled={!isActive}
                           onChange={(e) =>
                             setLocalRate(p.id, { sunday_rate: Number(e.target.value) })
                           }
-                          style={inputStyle(140)}
+                          style={inputStyle(140, !isActive)}
                         />
                       </td>
 
@@ -545,10 +591,11 @@ export default function PayRatesPage() {
                           step="0.01"
                           min="0"
                           value={r.holiday_rate}
+                          disabled={!isActive}
                           onChange={(e) =>
                             setLocalRate(p.id, { holiday_rate: Number(e.target.value) })
                           }
-                          style={inputStyle(160)}
+                          style={inputStyle(160, !isActive)}
                         />
                       </td>
 
@@ -561,12 +608,19 @@ export default function PayRatesPage() {
                       >
                         {actionButton("Save", () => save(p.id), {
                           primary: true,
-                          disabled: loading,
+                          disabled: loading || !isActive,
                         })}
                       </td>
                     </tr>
                   );
                 })}
+                {filteredProfiles.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ padding: 16, color: MUTED, borderBottom: `1px solid ${BORDER}` }}>
+                      No employees in this status view.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>

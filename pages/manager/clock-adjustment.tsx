@@ -149,7 +149,7 @@ function localDateISOFromAny(iso?: string | null) {
 }
 
 function isClockInsideSelectedLocalDates(clock: TimeClock, fromDate: string, toDate: string) {
-  const basis = clock.clock_in_at ?? clock.adjusted_clock_in_at ?? null;
+  const basis = clock.clock_in_at ?? clock.adjusted_clock_in_at ?? clock.clock_out_at ?? null;
   if (!basis) return false;
   const localISO = localDateISOFromAny(basis);
   return localISO >= fromDate && localISO <= toDate;
@@ -535,6 +535,34 @@ export default function ClockAdjustmentPage() {
 
   function staffLabel(staffId: string) {
     return nameById[staffId] ?? staffId;
+  }
+
+  function isStaffActive(staffId: string) {
+    return profiles.find((profile) => profile.id === staffId)?.is_active === true;
+  }
+
+  function historicalStaffLabel(staffId: string) {
+    return `${staffLabel(staffId)}${isStaffActive(staffId) ? "" : " (INACTIVE)"}`;
+  }
+
+  async function confirmStaffStillActive(staffId: string) {
+    const result = await supabase
+      .from("profiles")
+      .select("is_active")
+      .eq("id", staffId)
+      .maybeSingle();
+
+    if (result.error) {
+      setMsg("Could not confirm employee status: " + result.error.message);
+      return false;
+    }
+
+    if (result.data?.is_active !== true) {
+      setMsg("This employee is inactive and cannot receive a new workforce assignment.");
+      return false;
+    }
+
+    return true;
   }
 
   async function fetchData() {
@@ -974,6 +1002,8 @@ export default function ClockAdjustmentPage() {
         return;
       }
 
+      if (!(await confirmStaffStillActive(createStaffId))) return;
+
       const startISO = buildISOFromDateAndTime(createDate, createStartTime);
       let endISO = buildISOFromDateAndTime(createDate, createEndTime);
 
@@ -1038,7 +1068,7 @@ export default function ClockAdjustmentPage() {
     return (
       coverStaffByShift[shift.id] ??
       shift.covered_by_staff_id ??
-      coverClock?.staff_id ??
+      (coverClock && isStaffActive(coverClock.staff_id) ? coverClock.staff_id : null) ??
       ""
     );
   }
@@ -1054,6 +1084,7 @@ export default function ClockAdjustmentPage() {
     setLoading(true);
     setMsg("");
     try {
+      // This reconciles an existing clock record, so inactive historical staff remain repairable.
       const range = getClockRange(clock);
       if (!range) {
         setMsg("Cannot create shift because this clock has no valid time range.");
@@ -1136,6 +1167,8 @@ export default function ClockAdjustmentPage() {
         setMsg("Please select the covering staff first.");
         return;
       }
+
+      if (!(await confirmStaffStillActive(selectedCoverStaffId))) return;
 
       const hourlyRate = await getHourlyRateForShift(selectedCoverStaffId, shift.shift_start);
 
@@ -1367,7 +1400,9 @@ export default function ClockAdjustmentPage() {
 
   const filteredShifts = useMemo(() => {
     if (selectedStaffId === "ALL") return shifts;
-    return shifts.filter((s) => s.staff_id === selectedStaffId);
+    return shifts.filter(
+      (shift) => shift.staff_id === selectedStaffId || shift.covered_by_staff_id === selectedStaffId
+    );
   }, [shifts, selectedStaffId]);
 
   const rows = useMemo(() => {
@@ -1392,22 +1427,6 @@ export default function ClockAdjustmentPage() {
   }, [filteredShifts, clocks, leaveRows, weekdayRateByStaff, coverStaffByShift, coverNoteByShift]);
 
   const unrosteredClocks = useMemo(() => {
-    function localDateISOFromAny(iso?: string | null) {
-      if (!iso) return "";
-      const d = new Date(iso);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
-    }
-
-    function isClockInsideSelectedLocalDates(clock: TimeClock) {
-      const basis = clock.clock_in_at ?? clock.adjusted_clock_in_at ?? clock.clock_out_at ?? null;
-      if (!basis) return false;
-      const localISO = localDateISOFromAny(basis);
-      return localISO >= fromDate && localISO <= toDate;
-    }
-
     const matchedClockIds = new Set<number>();
     for (const r of rows) {
       if (r.clock?.id) matchedClockIds.add(r.clock.id);
@@ -1415,7 +1434,8 @@ export default function ClockAdjustmentPage() {
 
     return clocks
       .filter((c) => !matchedClockIds.has(c.id))
-      .filter((c) => isClockInsideSelectedLocalDates(c))
+      .filter((c) => isClockInsideSelectedLocalDates(c, fromDate, toDate))
+      .filter((c) => selectedStaffId === "ALL" || c.staff_id === selectedStaffId)
       .filter((c) => {
         const range = getClockRange(c);
         if (!range) return false;
@@ -1430,7 +1450,7 @@ export default function ClockAdjustmentPage() {
         const tb = new Date(b.clock.adjusted_clock_in_at ?? b.clock.clock_in_at ?? 0).getTime();
         return ta - tb;
       });
-  }, [clocks, rows, shifts, fromDate, toDate]);
+  }, [clocks, rows, shifts, fromDate, toDate, selectedStaffId]);
 
   const overallSummary = useMemo(() => {
     let totalHours = 0;
@@ -1447,17 +1467,46 @@ export default function ClockAdjustmentPage() {
     };
   }, [rows]);
 
-  const staffOptions = useMemo(() => {
+  const activeStaffOptions = useMemo(() => {
     const list = profiles
-      .filter((p) => p?.id && (p.is_active === undefined || p.is_active === null || p.is_active === true))
-      .map((p) => ({
-        id: p.id,
-        name: ((p.preferred_name ?? "").trim() || (p.full_name ?? "").trim() || p.id) as string,
+      .filter((profile) => profile?.id && profile.is_active === true)
+      .map((profile) => ({
+        id: profile.id,
+        name: ((profile.preferred_name ?? "").trim() || (profile.full_name ?? "").trim() || profile.id) as string,
       }));
 
     list.sort((a, b) => a.name.localeCompare(b.name));
     return list;
   }, [profiles]);
+
+  const periodStaffOptions = useMemo(() => {
+    const staffIds = new Set<string>();
+
+    profiles.forEach((profile) => {
+      if (profile.id && profile.is_active === true) staffIds.add(profile.id);
+    });
+    shifts.forEach((shift) => {
+      staffIds.add(shift.staff_id);
+      if (shift.covered_by_staff_id) staffIds.add(shift.covered_by_staff_id);
+    });
+    clocks.forEach((clock) => {
+      if (isClockInsideSelectedLocalDates(clock, fromDate, toDate)) staffIds.add(clock.staff_id);
+    });
+    leaveRows.forEach((leave) => staffIds.add(leave.staff_id));
+
+    const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+    const list = Array.from(staffIds).map((staffId) => {
+      const profile = profileById.get(staffId);
+      return {
+        id: staffId,
+        name: nameById[staffId] ?? staffId,
+        isActive: profile?.is_active === true,
+      };
+    });
+
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    return list;
+  }, [profiles, shifts, clocks, leaveRows, fromDate, toDate, nameById]);
 
   if (authLoading) {
     return (
@@ -1630,9 +1679,9 @@ export default function ClockAdjustmentPage() {
                 style={inputStyle("100%")}
               >
                 <option value="ALL">All staff</option>
-                {staffOptions.map((s) => (
+                {periodStaffOptions.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name}
+                    {s.name}{s.isActive ? "" : " (INACTIVE)"}
                   </option>
                 ))}
               </select>
@@ -1682,7 +1731,7 @@ export default function ClockAdjustmentPage() {
                   disabled={loading}
                 >
                   <option value="">Select staff</option>
-                  {staffOptions.map((s) => (
+                  {activeStaffOptions.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
                     </option>
@@ -1790,12 +1839,15 @@ export default function ClockAdjustmentPage() {
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                       <div>
                         <div style={{ fontWeight: 800, color: TEXT }}>{staffLabel(clock.staff_id)}</div>
+                        {!isStaffActive(clock.staff_id) ? (
+                          <div style={{ marginTop: 6 }}>{badge("INACTIVE", { kind: "red" })}</div>
+                        ) : null}
                         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
                           {startLabel} → {endLabel}
                         </div>
                         <div style={{ marginTop: 8 }}>
                           {likelyCoverShift ? (
-                            badge(`LIKELY COVER FOR ${staffLabel(likelyCoverShift.staff_id)}`, { kind: "blue" })
+                            badge(`LIKELY COVER FOR ${historicalStaffLabel(likelyCoverShift.staff_id)}`, { kind: "blue" })
                           ) : (
                             badge("EXTRA STAFF / UNROSTERED CLOCK", { kind: "yellow" })
                           )}
@@ -1948,6 +2000,9 @@ export default function ClockAdjustmentPage() {
                         }}
                       >
                         <div style={{ fontWeight: 700, color: TEXT }}>{staffLabel(shift.staff_id)}</div>
+                        {!isStaffActive(shift.staff_id) ? (
+                          <div style={{ marginTop: 5 }}>{badge("INACTIVE", { kind: "red" })}</div>
+                        ) : null}
                         <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
                           {payClassLabel(r.payroll.payClass)}
                         </div>
@@ -1984,7 +2039,7 @@ export default function ClockAdjustmentPage() {
 
                         {shift.covered_by_staff_id ? (
                           <div style={{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
-                            Covered by <b style={{ color: TEXT }}>{staffLabel(shift.covered_by_staff_id)}</b>
+                            Covered by <b style={{ color: TEXT }}>{historicalStaffLabel(shift.covered_by_staff_id)}</b>
                           </div>
                         ) : null}
 
@@ -2013,7 +2068,7 @@ export default function ClockAdjustmentPage() {
                                 style={inputStyle("100%")}
                               >
                                 <option value="">Select staff</option>
-                                {staffOptions
+                                {activeStaffOptions
                                   .filter((s) => s.id !== shift.staff_id)
                                   .map((s) => (
                                     <option key={s.id} value={s.id}>
