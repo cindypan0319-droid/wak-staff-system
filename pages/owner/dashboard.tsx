@@ -243,7 +243,7 @@ export default function OwnerDashboard() {
   async function fetchPayrollData() {
     const { data: shiftRows, error: shiftErr } = await supabase
       .from("shifts")
-      .select("id, staff_id, shift_start, shift_end, break_minutes")
+      .select("id, staff_id, shift_start, shift_end, break_minutes, hourly_rate")
       .gte("shift_start", `${startDate}T00:00:00`)
       .lt("shift_start", `${endDate}T23:59:59`)
       .order("shift_start", { ascending: true })
@@ -356,7 +356,12 @@ export default function OwnerDashboard() {
       const mins = getPayrollMinutes(shift, clock);
       const hours = round2(mins / 60);
       const dayType = getDayTypeByISO(shift.shift_start);
-      const rate = Number(rateFor(shift.staff_id, dayType) ?? 0);
+      const storedRate = shift.hourly_rate;
+      const hasValidStoredRate =
+        storedRate !== null && storedRate !== undefined && Number.isFinite(Number(storedRate));
+      const rate = hasValidStoredRate
+        ? Number(storedRate)
+        : Number(rateFor(shift.staff_id, dayType) ?? 0);
       const pay = round2(hours * rate);
       const date = String(shift.shift_start).slice(0, 10);
 

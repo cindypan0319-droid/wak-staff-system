@@ -19,6 +19,7 @@ type Shift = {
   break_minutes?: number | null;
   hourly_rate?: number | null;
   shift_status?: ShiftStatus | null;
+  covered_by_staff_id?: string | null;
 };
 
 type TimeClock = {
@@ -103,6 +104,20 @@ function todayDateInputValue() {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function isClockInsideSelectedLocalDates(clock: TimeClock, fromDate: string, toDate: string) {
+  const basis = clock.clock_in_at ?? clock.adjusted_clock_in_at ?? clock.clock_out_at ?? null;
+  if (!basis) return false;
+
+  const date = new Date(basis);
+  if (Number.isNaN(date.getTime())) return false;
+
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const localISO = `${yyyy}-${mm}-${dd}`;
+  return localISO >= fromDate && localISO <= toDate;
 }
 
 function toISODate(d: Date) {
@@ -369,6 +384,10 @@ export default function OwnerStaffSummaryPage() {
     return nameById[staffId] ?? staffId;
   }
 
+  function isStaffActive(staffId: string) {
+    return profiles.find((profile) => profile.id === staffId)?.is_active === true;
+  }
+
   async function fetchData() {
     if (!isOwner) return;
 
@@ -563,7 +582,9 @@ export default function OwnerStaffSummaryPage() {
 
   const filteredShifts = useMemo(() => {
     if (selectedStaffId === "ALL") return shifts;
-    return shifts.filter((s) => s.staff_id === selectedStaffId);
+    return shifts.filter(
+      (shift) => shift.staff_id === selectedStaffId || shift.covered_by_staff_id === selectedStaffId
+    );
   }, [shifts, selectedStaffId]);
 
   const rows = useMemo(() => {
@@ -678,13 +699,32 @@ export default function OwnerStaffSummaryPage() {
   }, [rows, nameById]);
 
   const staffOptions = useMemo(() => {
-    const list = profiles
-      .filter((p) => p?.id && (p.is_active === undefined || p.is_active === null || p.is_active === true))
-      .map((p) => ({ id: p.id, name: p.full_name ?? p.id }));
+    const staffIds = new Set<string>();
+
+    profiles.forEach((profile) => {
+      if (profile.id && profile.is_active === true) staffIds.add(profile.id);
+    });
+    shifts.forEach((shift) => {
+      staffIds.add(shift.staff_id);
+      if (shift.covered_by_staff_id) staffIds.add(shift.covered_by_staff_id);
+    });
+    clocks.forEach((clock) => {
+      if (isClockInsideSelectedLocalDates(clock, fromDate, toDate)) staffIds.add(clock.staff_id);
+    });
+    leaveRows.forEach((leave) => {
+      if (getLeaveCategory(leave.reason) !== null) staffIds.add(leave.staff_id);
+    });
+
+    const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+    const list = Array.from(staffIds).map((staffId) => ({
+      id: staffId,
+      name: nameById[staffId] ?? staffId,
+      isActive: profileById.get(staffId)?.is_active === true,
+    }));
 
     list.sort((a, b) => a.name.localeCompare(b.name));
     return list;
-  }, [profiles]);
+  }, [profiles, shifts, clocks, leaveRows, fromDate, toDate, nameById]);
 
   const shownStaffCount = summaryByStaff.length;
 
@@ -850,7 +890,7 @@ export default function OwnerStaffSummaryPage() {
                 <option value="ALL">All staff</option>
                 {staffOptions.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name}
+                    {s.name}{s.isActive ? "" : " (INACTIVE)"}
                   </option>
                 ))}
               </select>
@@ -991,7 +1031,26 @@ export default function OwnerStaffSummaryPage() {
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 900, fontSize: 18, color: TEXT }}>{staff.staffName}</div>
+                      <div style={{ fontWeight: 900, fontSize: 18, color: TEXT }}>
+                        {staff.staffName}{" "}
+                        {!isStaffActive(staff.staffId) ? (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              padding: "3px 7px",
+                              borderRadius: 999,
+                              background: "#FEE2E2",
+                              color: "#991B1B",
+                              fontSize: 10,
+                              fontWeight: 900,
+                              letterSpacing: 0.4,
+                              verticalAlign: "middle",
+                            }}
+                          >
+                            INACTIVE
+                          </span>
+                        ) : null}
+                      </div>
                       <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
                         {staff.groups.length} payroll line{staff.groups.length === 1 ? "" : "s"}
                       </div>
