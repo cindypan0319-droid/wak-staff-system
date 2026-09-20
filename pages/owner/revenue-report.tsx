@@ -18,6 +18,7 @@ export default function RevenueReport() {
     const { data, error } = await supabase
       .from("v_owner_daily_breakdown")
       .select("*")
+      .eq("store_id", "MOOROOLBARK")
       .gte("date", startDate)
       .lte("date", endDate)
       .order("date", { ascending: false });
@@ -73,7 +74,7 @@ export default function RevenueReport() {
           </thead>
           <tbody>
             {data.map((row) => (
-              <tr key={row.date}>
+              <tr key={`${row.store_id}-${row.date}`}>
                 <td>{row.date}</td>
                 <td>${Number(row.cash).toFixed(2)}</td>
                 <td>${Number(row.eftpos).toFixed(2)}</td>

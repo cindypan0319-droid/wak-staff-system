@@ -407,6 +407,7 @@ export default function OwnerDashboard() {
     const { data: revenue, error: revenueErr } = await supabase
       .from("v_owner_daily_breakdown")
       .select("*")
+      .eq("store_id", "MOOROOLBARK")
       .gte("date", startDate)
       .lte("date", endDate)
       .order("date", { ascending: true });
