@@ -4,7 +4,6 @@ import { supabase } from "../../lib/supabaseClient";
 const DEFAULT_STORE_ID = "MOOROOLBARK";
 const DEFAULT_FLOAT_IF_NO_MORNING = 400;
 const EPS = 0.01;
-const AUTO_SAVE_DELAY = 2500;
 
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
@@ -15,10 +14,20 @@ const TEXT = "#111827";
 const MUTED = "#6B7280";
 
 type Platform = {
-  id: number;
+  id: number | string;
   name: string;
   is_active: boolean;
   sort_order: number;
+};
+
+type DailyCloseResult = {
+  night_updated_at: string;
+  close_contract_version: number;
+};
+
+type LoadExistingResult = {
+  nightExists: boolean;
+  fullyLoaded: boolean;
 };
 
 type CashCounts = {
@@ -74,11 +83,32 @@ function money(n: number) {
   return n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 }
 
-function parseMoneyOrZero(raw: string | undefined | null) {
+type MoneyValidation =
+  | { value: number; error: null }
+  | { value: null; error: "required" | "invalid" | "negative" };
+
+function parseNonnegativeMoney(raw: string | undefined | null): MoneyValidation {
   const s = String(raw ?? "").trim();
-  if (!s) return 0;
+  if (!s) return { value: null, error: "required" };
+
   const n = Number(s);
-  return Number.isFinite(n) ? n : 0;
+  if (!Number.isFinite(n)) return { value: null, error: "invalid" };
+  if (n < 0) return { value: null, error: "negative" };
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(s)) {
+    return { value: null, error: "invalid" };
+  }
+
+  return { value: n, error: null };
+}
+
+function moneyValueForDisplay(raw: string | undefined | null) {
+  return parseNonnegativeMoney(raw).value ?? 0;
+}
+
+function moneyValidationMessage(label: string, validation: MoneyValidation) {
+  if (validation.error === "required") return `${label} is required. Enter 0 if the amount is zero.`;
+  if (validation.error === "negative") return `${label} cannot be negative.`;
+  return `${label} must be a valid number.`;
 }
 
 function parseIntOrNull(raw: string) {
@@ -89,21 +119,29 @@ function parseIntOrNull(raw: string) {
 }
 
 function countsToStoredJson(c: CashCounts) {
-  const out: any = {};
+  const out: Record<string, number> = {};
   for (const k of Object.keys(c) as (keyof CashCounts)[]) {
     out[k] = Number.isFinite(Number(c[k])) ? Number(c[k]) : 0;
   }
   return out;
 }
 
-function storedJsonToCounts(obj: any): CashCounts {
-  const out: any = { ...emptyCounts };
+function storedJsonToCounts(obj: unknown): CashCounts {
+  const record =
+    typeof obj === "object" && obj !== null ? (obj as Record<string, unknown>) : {};
+  const out: CashCounts = { ...emptyCounts };
   for (const k of Object.keys(emptyCounts) as (keyof CashCounts)[]) {
-    const v = obj?.[k];
+    const v = record[k];
     const n = Number(v);
     out[k] = Number.isFinite(n) && n > 0 ? n : null;
   }
-  return out as CashCounts;
+  return out;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function calcTotal(c: CashCounts) {
@@ -167,23 +205,97 @@ function buildClosingSnapshot(args: {
     })
     .map((p) => ({
       name: p.name,
-      gross: round2(parseMoneyOrZero(args.platformGrossText[p.name] ?? "")),
+      grossText: args.platformGrossText[canonicalPlatformName(p.name)] ?? "",
     }));
 
   return JSON.stringify({
     nightCounts: normalizeCountsForCompare(args.nightCounts),
     removedCounts: normalizeCountsForCompare(args.removedCounts),
-    cashSales: round2(parseMoneyOrZero(args.cashSalesText)),
-    eftposSales: round2(parseMoneyOrZero(args.eftposSalesText)),
-    notes: args.notes.trim(),
+    cashSalesText: args.cashSalesText,
+    eftposSalesText: args.eftposSalesText,
+    notes: args.notes,
     cashDiffReason: args.cashDiffReason || "",
     cashDiffNote: args.cashDiffNote.trim(),
     platforms: normalizedPlatforms,
   });
 }
 
-function getAutoCashDiffReason(): CashDiffReason {
-  return "COUNTING_MISTAKE";
+function canonicalPlatformName(name: string) {
+  const trimmed = name.trim();
+  const normalized = trimmed.toUpperCase().replace(/\s+/g, " ");
+
+  switch (normalized) {
+    case "DOORDASH":
+      return "DOORDASH";
+    case "UBER EATS":
+    case "UBER_EATS":
+    case "UBER":
+      return "UBER_EATS";
+    case "WAK APP":
+    case "WAK":
+      return "WAK";
+    case "DELIVEROO":
+      return "DELIVEROO";
+    case "MENULOG":
+      return "MENULOG";
+    default:
+      return trimmed;
+  }
+}
+
+function friendlyRpcError(message: string) {
+  if (message.includes("DAILY_CLOSE_ALREADY_EXISTS_USE_CORRECTION")) {
+    return "This Daily Close has already been submitted. Reload to view the committed close.";
+  }
+  if (message.includes("DAILY_CLOSE_LEGACY_PARTIAL_REQUIRES_MANAGER")) {
+    return "Existing partial sales data requires a manager to complete this Daily Close.";
+  }
+  if (message.includes("DAILY_CLOSE_REVISION_CONFLICT")) {
+    return "This Daily Close changed while you were working. Reload before trying again.";
+  }
+  if (message.includes("Employee profile is inactive")) {
+    return "Your employee profile is inactive. Daily Entry cannot be saved.";
+  }
+  if (message.includes("Authentication required")) {
+    return "Your login session is no longer valid. Sign in again before saving.";
+  }
+  if (
+    message.includes("DAILY_CLOSE_LEGACY_MORNING_COUNTS_CONFLICT") ||
+    message.includes("morning_counts")
+  ) {
+    return "The saved Morning Cashup is malformed. Ask a manager to review it before closing.";
+  }
+  if (message.includes("cash_difference.reason is required")) {
+    return "Choose a cash difference reason before submitting.";
+  }
+  if (message.includes("cash_difference.note is required")) {
+    return "Enter a note when the cash difference reason is Other.";
+  }
+  if (message.includes("FEE_RECALCULATION_CONFIRMATION_REQUIRED")) {
+    return "Changing an existing platform amount requires confirmation because its fee will be recalculated.";
+  }
+  if (message.includes("PLATFORM_PARTIAL")) {
+    return "Platform data is incomplete. Reload the page and enter an amount for every listed platform.";
+  }
+  if (
+    message.includes("CANONICAL_ALIAS_COLLISION") ||
+    message.includes("Active platform configuration contains canonical alias duplicates")
+  ) {
+    return "Platform configuration has a duplicate or conflicting name. Please reload and contact a manager.";
+  }
+  if (message.includes("Platform is not active or present for this date")) {
+    return "One of the platform entries is no longer valid. Please reload the page and try again. If it continues, contact a manager.";
+  }
+  if (message.includes("DAILY_CLOSE_NOTES_TARGET_MISSING")) {
+    return "The Daily Close record could not be found while saving notes. Please reload and ask a manager to review it.";
+  }
+  if (message.includes("MORNING_AFTER_CLOSE_REQUIRES_MANAGER")) {
+    return "Morning Cashup cannot be changed after the Daily Close has been submitted.";
+  }
+  if (message.includes("STAFF may only update a MORNING")) {
+    return "Only the employee who entered this Morning Cashup, or a manager, may change it.";
+  }
+  return message;
 }
 
 export default function DailyEntryPage() {
@@ -199,6 +311,7 @@ export default function DailyEntryPage() {
 
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [platformGrossText, setPlatformGrossText] = useState<Record<string, string>>({});
+  const [existingPlatformGross, setExistingPlatformGross] = useState<Record<string, number>>({});
 
   const [cashSalesText, setCashSalesText] = useState<string>("");
   const [eftposSalesText, setEftposSalesText] = useState<string>("");
@@ -212,6 +325,12 @@ export default function DailyEntryPage() {
   const [cashDiffNote, setCashDiffNote] = useState<string>("");
 
   const [hasMorningRecord, setHasMorningRecord] = useState(false);
+  const [savedMorningTotal, setSavedMorningTotal] = useState(DEFAULT_FLOAT_IF_NO_MORNING);
+  const [hasNightRecord, setHasNightRecord] = useState(false);
+  const [nightRevision, setNightRevision] = useState<string | null>(null);
+  const [morningRecountAcknowledged, setMorningRecountAcknowledged] = useState(false);
+  const [nightRecountAcknowledged, setNightRecountAcknowledged] = useState(false);
+  const [removedRecountAcknowledged, setRemovedRecountAcknowledged] = useState(false);
 
   const [morningDirty, setMorningDirty] = useState(false);
   const [closingDirty, setClosingDirty] = useState(false);
@@ -226,7 +345,6 @@ export default function DailyEntryPage() {
   const initialLoadDoneRef = useRef(false);
   const morningSavingRef = useRef(false);
   const closingSavingRef = useRef(false);
-  const lastAutoSaveKeyRef = useRef<string>("");
 
   const morningServerSnapshotRef = useRef<string>("");
   const closingServerSnapshotRef = useRef<string>("");
@@ -236,29 +354,58 @@ export default function DailyEntryPage() {
   const removedTotal = useMemo(() => calcTotal(removedCounts), [removedCounts]);
 
   const baselineMorningTotal = useMemo(
-    () => (hasMorningRecord ? morningTotal : DEFAULT_FLOAT_IF_NO_MORNING),
-    [hasMorningRecord, morningTotal]
+    () => (hasMorningRecord ? savedMorningTotal : DEFAULT_FLOAT_IF_NO_MORNING),
+    [hasMorningRecord, savedMorningTotal]
   );
 
-  const cashToRemove = useMemo(() => round2(Math.max(0, nightTotal - baselineMorningTotal)), [
-    nightTotal,
-    baselineMorningTotal,
-  ]);
+  const countedDailyCashMovement = useMemo(
+    () => round2(nightTotal - baselineMorningTotal),
+    [nightTotal, baselineMorningTotal]
+  );
 
-  const removedVsShouldDiff = useMemo(() => round2(removedTotal - cashToRemove), [removedTotal, cashToRemove]);
+  const targetRemovedCash = useMemo(
+    () => round2(Math.max(0, nightTotal - DEFAULT_FLOAT_IF_NO_MORNING)),
+    [nightTotal]
+  );
 
-  const actualCashSales = useMemo(() => round2(parseMoneyOrZero(cashSalesText)), [cashSalesText]);
-  const eftposSales = useMemo(() => round2(parseMoneyOrZero(eftposSalesText)), [eftposSalesText]);
+  const removedVsShouldDiff = useMemo(
+    () => round2(removedTotal - targetRemovedCash),
+    [removedTotal, targetRemovedCash]
+  );
 
-  const actualCashVsShouldDiff = useMemo(() => round2(actualCashSales - cashToRemove), [actualCashSales, cashToRemove]);
+  const projectedClosingFloat = useMemo(
+    () => round2(nightTotal - removedTotal),
+    [nightTotal, removedTotal]
+  );
+
+  const closingFloatVariance = useMemo(
+    () => round2(projectedClosingFloat - DEFAULT_FLOAT_IF_NO_MORNING),
+    [projectedClosingFloat]
+  );
+
+  const actualCashSales = useMemo(
+    () => round2(moneyValueForDisplay(cashSalesText)),
+    [cashSalesText]
+  );
+  const eftposSales = useMemo(
+    () => round2(moneyValueForDisplay(eftposSalesText)),
+    [eftposSalesText]
+  );
+
+  const cashVariance = useMemo(
+    () => round2(actualCashSales - countedDailyCashMovement),
+    [actualCashSales, countedDailyCashMovement]
+  );
 
   const instoreSubtotal = useMemo(() => round2(actualCashSales + eftposSales), [actualCashSales, eftposSales]);
 
   const onlineSubtotal = useMemo(() => {
     let sum = 0;
-    for (const k of Object.keys(platformGrossText)) sum += parseMoneyOrZero(platformGrossText[k]);
+    for (const platform of platforms) {
+      sum += moneyValueForDisplay(platformGrossText[canonicalPlatformName(platform.name)]);
+    }
     return round2(sum);
-  }, [platformGrossText]);
+  }, [platformGrossText, platforms]);
 
   const total = useMemo(() => round2(instoreSubtotal + onlineSubtotal), [instoreSubtotal, onlineSubtotal]);
 
@@ -339,16 +486,23 @@ export default function DailyEntryPage() {
     setter: (fn: (prev: CashCounts) => CashCounts) => void,
     key: keyof CashCounts,
     raw: string,
-    section: "morning" | "closing"
+    section: "morning" | "night" | "removed"
   ) {
     const n = parseIntOrNull(raw);
     setter((prev) => ({ ...prev, [key]: n }));
 
     if (initialLoadDoneRef.current) {
       if (section === "morning") {
+        setMorningRecountAcknowledged(false);
         setMorningSaveState("idle");
         setMorningSaveError("");
       } else {
+        if (section === "night") {
+          setNightRecountAcknowledged(false);
+          setRemovedRecountAcknowledged(false);
+        } else {
+          setRemovedRecountAcknowledged(false);
+        }
         setClosingSaveState("idle");
         setClosingSaveError("");
       }
@@ -371,25 +525,32 @@ export default function DailyEntryPage() {
       .order("name", { ascending: true });
 
     if (res.error) {
-      setMsg("❌ Cannot load platforms: " + res.error.message);
       setPlatforms([]);
-      return [];
+      return {
+        list: [] as Platform[],
+        errorMessage: "Cannot load platforms: " + res.error.message,
+      };
     }
 
     const list = (res.data ?? []) as Platform[];
     setPlatforms(list);
-    return list;
+    return { list, errorMessage: null };
   }
 
-  async function loadExisting(options?: { restoreDraft?: boolean }) {
+  async function loadExisting(options?: { restoreDraft?: boolean }): Promise<LoadExistingResult> {
     const restoreDraft = options?.restoreDraft ?? true;
+    const loadErrors: string[] = [];
 
     setLoading(true);
     setMsg("");
     initialLoadDoneRef.current = false;
 
     try {
-      const loadedPlatforms = await loadPlatforms();
+      const platformLoad = await loadPlatforms();
+      let loadedPlatforms = platformLoad.list;
+      if (platformLoad.errorMessage) {
+        loadErrors.push(platformLoad.errorMessage);
+      }
 
       const ds = await supabase
         .from("daily_sales")
@@ -398,16 +559,17 @@ export default function DailyEntryPage() {
         .eq("store_id", DEFAULT_STORE_ID)
         .maybeSingle();
 
-      if (ds.error && ds.error.code !== "PGRST116") {
-        setMsg("❌ Cannot load instore sales: " + ds.error.message);
+      const dailySalesLoaded = !ds.error || ds.error.code === "PGRST116";
+      if (!dailySalesLoaded) {
+        loadErrors.push("Cannot load instore sales: " + ds.error.message);
       }
 
-      const row = ds.data as any;
+      const row = ds.data;
       const cashVal = row?.cash_sales;
       const eftVal = row?.eftpos_sales;
 
-      const serverCashSalesText = cashVal == null || Number(cashVal) === 0 ? "" : String(cashVal);
-      const serverEftposSalesText = eftVal == null || Number(eftVal) === 0 ? "" : String(eftVal);
+      const serverCashSalesText = cashVal == null ? "" : String(cashVal);
+      const serverEftposSalesText = eftVal == null ? "" : String(eftVal);
       const serverNotes = row?.notes ?? "";
 
       const pi = await supabase
@@ -417,16 +579,40 @@ export default function DailyEntryPage() {
         .eq("store_id", DEFAULT_STORE_ID);
 
       let serverPlatformGrossText: Record<string, string> = {};
-      if (pi.error) {
-        setMsg((prev) => prev || "❌ Cannot load online sales: " + pi.error.message);
+      let serverExistingPlatformGross: Record<string, number> = {};
+      const platformIncomeLoaded = !pi.error;
+      if (!platformIncomeLoaded) {
+        loadErrors.push("Cannot load online sales: " + pi.error.message);
       } else {
         const map: Record<string, string> = {};
+        const existingMap: Record<string, number> = {};
+        const activeCanonicalNames = new Set(
+          loadedPlatforms.map((platform) => canonicalPlatformName(platform.name))
+        );
+        const historicalPlatforms: Platform[] = [];
+
         for (const r of pi.data ?? []) {
-          const p = String((r as any).platform);
-          const g = (r as any).gross_income;
-          map[p] = g == null || Number(g) === 0 ? "" : String(g);
+          const rawPlatform = String(r.platform);
+          const p = canonicalPlatformName(rawPlatform);
+          const g = r.gross_income;
+          const gross = Number(g);
+          map[p] = Number.isFinite(gross) ? String(gross) : "0";
+          existingMap[p] = Number.isFinite(gross) ? round2(gross) : 0;
+
+          if (!activeCanonicalNames.has(p)) {
+            activeCanonicalNames.add(p);
+            historicalPlatforms.push({
+              id: `historical-${p}`,
+              name: p,
+              is_active: false,
+              sort_order: Number.MAX_SAFE_INTEGER,
+            });
+          }
         }
+        loadedPlatforms = [...loadedPlatforms, ...historicalPlatforms];
+        setPlatforms(loadedPlatforms);
         serverPlatformGrossText = map;
+        serverExistingPlatformGross = existingMap;
       }
 
       const m = await supabase
@@ -437,35 +623,37 @@ export default function DailyEntryPage() {
         .eq("session_type", "MORNING")
         .maybeSingle();
 
-      if (m.error && m.error.code !== "PGRST116") {
-        setMsg((prev) => prev || "❌ Cannot load morning cashup: " + m.error.message);
+      const morningLoaded = !m.error || m.error.code === "PGRST116";
+      if (!morningLoaded) {
+        loadErrors.push("Cannot load morning cashup: " + m.error.message);
       }
 
       const serverHasMorningRecord = !!m.data;
       const serverMorningCounts = m.data
-        ? storedJsonToCounts((m.data as any).counts ?? {})
+        ? storedJsonToCounts(m.data.counts ?? {})
         : { ...emptyCounts };
 
       const n = await supabase
         .from("cashup_sessions")
-        .select("counts")
+        .select("counts, updated_at")
         .eq("business_date", date)
         .eq("store_id", DEFAULT_STORE_ID)
         .eq("session_type", "NIGHT")
         .maybeSingle();
 
-      if (n.error && n.error.code !== "PGRST116") {
-        setMsg((prev) => prev || "❌ Cannot load closing cashup: " + n.error.message);
+      const nightLoaded = !n.error || n.error.code === "PGRST116";
+      if (!nightLoaded) {
+        loadErrors.push("Cannot load closing cashup: " + n.error.message);
       }
 
       const serverNightCounts = n.data
-        ? storedJsonToCounts((n.data as any).counts ?? {})
+        ? storedJsonToCounts(n.data.counts ?? {})
         : { ...emptyCounts };
 
-      const nightCountsRaw = (n.data as any)?.counts ?? {};
-      const removedRaw = nightCountsRaw?._removed_counts ?? null;
-      const reasonRaw = nightCountsRaw?._cash_diff_reason ?? "";
-      const noteRaw = nightCountsRaw?._cash_diff_note ?? "";
+      const nightCountsRaw = asRecord(n.data?.counts);
+      const removedRaw = nightCountsRaw._removed_counts ?? null;
+      const reasonRaw = nightCountsRaw._cash_diff_reason ?? "";
+      const noteRaw = nightCountsRaw._cash_diff_note ?? "";
 
       const serverRemovedCounts = removedRaw
         ? storedJsonToCounts(removedRaw)
@@ -488,6 +676,13 @@ export default function DailyEntryPage() {
       });
 
       setHasMorningRecord(serverHasMorningRecord);
+      setSavedMorningTotal(
+        serverHasMorningRecord
+          ? calcTotal(serverMorningCounts)
+          : DEFAULT_FLOAT_IF_NO_MORNING
+      );
+      setHasNightRecord(!!n.data);
+      setNightRevision(n.data?.updated_at ?? null);
       setMorningCounts(serverMorningCounts);
       setNightCounts(serverNightCounts);
       setRemovedCounts(serverRemovedCounts);
@@ -496,8 +691,12 @@ export default function DailyEntryPage() {
       setEftposSalesText(serverEftposSalesText);
       setNotes(serverNotes);
       setPlatformGrossText(serverPlatformGrossText);
+      setExistingPlatformGross(serverExistingPlatformGross);
       setCashDiffReason(serverCashDiffReason);
       setCashDiffNote(serverCashDiffNote);
+      setMorningRecountAcknowledged(false);
+      setNightRecountAcknowledged(false);
+      setRemovedRecountAcknowledged(false);
 
       setMorningSaveState("idle");
       setClosingSaveState("idle");
@@ -506,9 +705,24 @@ export default function DailyEntryPage() {
       setMorningDirty(false);
       setClosingDirty(false);
 
-      setMsg("✅ Loaded saved data for this date.");
+      const fullyLoaded =
+        platformLoad.errorMessage === null &&
+        dailySalesLoaded &&
+        platformIncomeLoaded &&
+        morningLoaded &&
+        nightLoaded;
 
-      if (restoreDraft) {
+      if (loadErrors.length > 0) {
+        setMsg("❌ " + loadErrors.join(" "));
+      } else {
+        setMsg(
+          n.data
+            ? "ℹ️ This Daily Close has already been submitted and is read-only."
+            : "✅ Loaded saved data for this date."
+        );
+      }
+
+      if (restoreDraft && fullyLoaded && !n.data) {
         const savedDraft = localStorage.getItem(draftKey);
 
         if (savedDraft) {
@@ -518,20 +732,32 @@ export default function DailyEntryPage() {
             setCashSalesText(d.cashSalesText ?? "");
             setEftposSalesText(d.eftposSalesText ?? "");
             setNotes(d.notes ?? "");
-            setPlatformGrossText(d.platformGrossText ?? {});
+            const restoredPlatformGross: Record<string, string> = {};
+            for (const [platformName, gross] of Object.entries(
+              (d.platformGrossText ?? {}) as Record<string, string>
+            )) {
+              restoredPlatformGross[canonicalPlatformName(platformName)] = gross;
+            }
+            setPlatformGrossText({
+              ...serverPlatformGrossText,
+              ...restoredPlatformGross,
+            });
             setMorningCounts(d.morningCounts ?? { ...emptyCounts });
             setNightCounts(d.nightCounts ?? { ...emptyCounts });
             setRemovedCounts(d.removedCounts ?? { ...emptyCounts });
             setCashDiffReason(d.cashDiffReason ?? "");
             setCashDiffNote(d.cashDiffNote ?? "");
-            setHasMorningRecord(!!d.hasMorningRecord);
-
             setMsg("ℹ️ Restored unsaved local draft.");
           } catch (e) {
             console.log("restore draft error:", e);
           }
         }
       }
+
+      return {
+        nightExists: nightLoaded && !!n.data,
+        fullyLoaded,
+      };
     } finally {
       setLoading(false);
       initialLoadDoneRef.current = true;
@@ -543,15 +769,12 @@ export default function DailyEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
-  async function saveMorning(options?: { silent?: boolean }) {
+  async function saveMorning() {
     if (morningSavingRef.current) return true;
 
     morningSavingRef.current = true;
-
-    if (!options?.silent) {
-      setLoading(true);
-      setMsg("");
-    }
+    setLoading(true);
+    setMsg("");
 
     setMorningSaveState("saving");
     setMorningSaveError("");
@@ -559,39 +782,45 @@ export default function DailyEntryPage() {
     try {
       if (!isStoreDevice) {
         const text = "❌ Daily entry can only be saved on the store device / store network.";
-        if (!options?.silent) setMsg(text);
+        setMsg(text);
         setMorningSaveState("error");
         setMorningSaveError(text);
         return false;
       }
 
-      const { data } = await supabase.auth.getUser();
-      const uid = data.user?.id ?? null;
-      if (!uid) {
-        const text = "❌ Not logged in.";
-        if (!options?.silent) setMsg(text);
+      if (hasNightRecord) {
+        const text = "❌ Morning Cashup cannot be changed after this Daily Close was submitted.";
+        setMsg(text);
         setMorningSaveState("error");
         setMorningSaveError(text);
         return false;
       }
 
-      const payload: any = {
-        business_date: date,
-        store_id: DEFAULT_STORE_ID,
-        session_type: "MORNING",
-        counts: countsToStoredJson(morningCounts),
-        total_cash: morningTotal,
-        removed_cash: 0,
-        entered_by: uid,
-      };
+      if (
+        Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) >= EPS &&
+        !morningRecountAcknowledged
+      ) {
+        setMorningRecountAcknowledged(true);
+        setMorningSaveState("idle");
+        setMsg(
+          `⚠️ Morning cash is ${money(
+            Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING)
+          )} ${morningTotal > DEFAULT_FLOAT_IF_NO_MORNING ? "over" : "short"}. Recount the till, then save again if ${money(
+            morningTotal
+          )} is the actual physical amount.`
+        );
+        return false;
+      }
 
-      const res = await supabase.from("cashup_sessions").upsert(payload, {
-        onConflict: "business_date,store_id,session_type",
-      } as any);
+      const res = await supabase.rpc("save_morning_cashup", {
+        p_business_date: date,
+        p_store_id: DEFAULT_STORE_ID,
+        p_counts: countsToStoredJson(morningCounts),
+      });
 
       if (res.error) {
-        const text = "❌ Save morning cashup failed: " + res.error.message;
-        if (!options?.silent) setMsg(text);
+        const text = "❌ Save morning cashup failed: " + friendlyRpcError(res.error.message);
+        setMsg(text);
         setMorningSaveState("error");
         setMorningSaveError(text);
         return false;
@@ -600,56 +829,35 @@ export default function DailyEntryPage() {
       morningServerSnapshotRef.current = buildMorningSnapshot(morningCounts);
       setMorningDirty(false);
       setHasMorningRecord(true);
+      setSavedMorningTotal(morningTotal);
       setMorningSaveState("saved");
       setMorningLastSavedAt(new Date().toISOString());
-
-      if (!options?.silent) {
-        setMsg("✅ Morning cashup saved!");
-      }
+      setMsg(`✅ Morning cashup saved at the actual counted amount of ${money(morningTotal)}.`);
 
       return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown Morning Cashup error";
+      const text = "❌ Save morning cashup failed: " + friendlyRpcError(message);
+      setMsg(text);
+      setMorningSaveState("error");
+      setMorningSaveError(text);
+      return false;
     } finally {
       morningSavingRef.current = false;
-      if (!options?.silent) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
-  }
-
-  function useCashToRemoveAsCashSales() {
-    setCashSalesText(String(cashToRemove.toFixed(2)));
-    markClosingDirtyStyleOnly();
   }
 
   function needReason() {
-    return Math.abs(actualCashVsShouldDiff) > EPS;
+    return Math.abs(cashVariance) >= EPS;
   }
 
-  async function saveClosingAndSales(options?: { silent?: boolean }) {
-    const autoSaveKey = JSON.stringify({
-      date,
-      nightCounts,
-      removedCounts,
-      cashSalesText,
-      eftposSalesText,
-      notes,
-      cashDiffReason,
-      cashDiffNote,
-      platformGrossText,
-    });
-
-    if (options?.silent && autoSaveKey === lastAutoSaveKeyRef.current) {
-      return true;
-    }
-
+  async function saveClosingAndSales() {
     if (closingSavingRef.current) return true;
 
     closingSavingRef.current = true;
-
-    if (!options?.silent) {
-      setLoading(true);
-      setMsg("");
-    }
+    setLoading(true);
+    setMsg("");
 
     setClosingSaveState("saving");
     setClosingSaveError("");
@@ -657,149 +865,210 @@ export default function DailyEntryPage() {
     try {
       if (!isStoreDevice) {
         const text = "❌ Daily entry can only be saved on the store device / store network.";
-        if (!options?.silent) setMsg(text);
+        setMsg(text);
         setClosingSaveState("error");
         setClosingSaveError(text);
         return false;
       }
 
-      const { data } = await supabase.auth.getUser();
-      const uid = data.user?.id ?? null;
-      if (!uid) {
-        const text = "❌ Not logged in.";
-        if (!options?.silent) setMsg(text);
+      if (hasNightRecord) {
+        const text = "❌ This Daily Close has already been submitted and cannot be changed here.";
+        setMsg(text);
         setClosingSaveState("error");
         setClosingSaveError(text);
         return false;
       }
 
-      let finalCashDiffReason: CashDiffReason = cashDiffReason;
-      let finalCashDiffNote = cashDiffNote;
+      if (morningDirty) {
+        const text = "❌ Save or discard the pending Morning Cashup changes before submitting Daily Close.";
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
 
-      if (needReason()) {
-        if (!finalCashDiffReason) {
-          finalCashDiffReason = getAutoCashDiffReason();
+      const cashSalesValidation = parseNonnegativeMoney(cashSalesText);
+      if (cashSalesValidation.error) {
+        const text = "❌ " + moneyValidationMessage("CASH Sales", cashSalesValidation);
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
+      const eftposSalesValidation = parseNonnegativeMoney(eftposSalesText);
+      if (eftposSalesValidation.error) {
+        const text = "❌ " + moneyValidationMessage("EFTPOS Sales", eftposSalesValidation);
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
+      const seenCanonicalPlatforms = new Set<string>();
+      const platformInstructions: {
+        platform: string;
+        action: "SET";
+        gross_income: number;
+      }[] = [];
+
+      for (const platform of platforms) {
+        const canonicalName = canonicalPlatformName(platform.name);
+        if (seenCanonicalPlatforms.has(canonicalName)) {
+          throw new Error(`Duplicate canonical platform: ${canonicalName}`);
         }
+        seenCanonicalPlatforms.add(canonicalName);
 
-        if (finalCashDiffReason === "OTHER" && !finalCashDiffNote.trim()) {
-          finalCashDiffNote = "Auto-saved without staff note.";
-        }
-      } else {
-        finalCashDiffReason = "";
-        finalCashDiffNote = "";
-      }
-
-      const nightCountsStore: any = countsToStoredJson(nightCounts);
-      nightCountsStore._removed_counts = countsToStoredJson(removedCounts);
-      nightCountsStore._cash_diff_reason = finalCashDiffReason;
-      nightCountsStore._cash_diff_note = finalCashDiffNote;
-
-      const nightPayload: any = {
-        business_date: date,
-        store_id: DEFAULT_STORE_ID,
-        session_type: "NIGHT",
-        counts: nightCountsStore,
-        total_cash: nightTotal,
-        removed_cash: removedTotal,
-        entered_by: uid,
-      };
-
-      const nres = await supabase.from("cashup_sessions").upsert(nightPayload, {
-        onConflict: "business_date,store_id,session_type",
-      } as any);
-
-      if (nres.error) {
-        const text = "❌ Save closing cashup failed: " + nres.error.message;
-        if (!options?.silent) setMsg(text);
-        setClosingSaveState("error");
-        setClosingSaveError(text);
-        return false;
-      }
-
-      const dailyPayload: any = {
-        business_date: date,
-        store_id: DEFAULT_STORE_ID,
-        cash_sales: round2(actualCashSales),
-        eftpos_sales: round2(eftposSales),
-        total_sales: round2(actualCashSales + eftposSales + onlineSubtotal),
-        notes: notes || null,
-        entered_by: uid,
-      };
-
-      const ds = await supabase.from("daily_sales").upsert(dailyPayload, {
-        onConflict: "business_date,store_id",
-      } as any);
-
-      if (ds.error) {
-        const text = "❌ Save instore failed: " + ds.error.message;
-        if (!options?.silent) setMsg(text);
-        setClosingSaveState("error");
-        setClosingSaveError(text);
-        return false;
-      }
-
-      for (const p of platforms) {
-        const gross = round2(parseMoneyOrZero(platformGrossText[p.name] ?? ""));
-        const payload: any = {
-          business_date: date,
-          store_id: DEFAULT_STORE_ID,
-          platform: p.name,
-          gross_income: gross,
-          entered_by: uid,
-        };
-
-        const res = await supabase.from("platform_income").upsert(payload, {
-          onConflict: "business_date,store_id,platform",
-        } as any);
-
-        if (res.error) {
-          const text = `❌ Save platform "${p.name}" failed: ${res.error.message}`;
-          if (!options?.silent) setMsg(text);
+        const validation = parseNonnegativeMoney(platformGrossText[canonicalName]);
+        if (validation.error) {
+          const text = "❌ " + moneyValidationMessage(`${platform.name} platform income`, validation);
+          setMsg(text);
           setClosingSaveState("error");
           setClosingSaveError(text);
           return false;
         }
+
+        platformInstructions.push({
+          platform: canonicalName,
+          action: "SET",
+          gross_income: round2(validation.value),
+        });
       }
 
-      setCashDiffReason(finalCashDiffReason);
-      setCashDiffNote(finalCashDiffNote);
+      if (needReason() && !nightRecountAcknowledged) {
+        setNightRecountAcknowledged(true);
+        setClosingSaveState("idle");
+        setMsg(
+          `⚠️ POS cash differs from counted daily cash movement by ${money(
+            cashVariance
+          )}. Recount the Night till, then submit again if the count is correct.`
+        );
+        return false;
+      }
 
-      closingServerSnapshotRef.current = buildClosingSnapshot({
-        nightCounts,
-        removedCounts,
-        cashSalesText,
-        eftposSalesText,
+      if (Math.abs(removedVsShouldDiff) >= EPS && !removedRecountAcknowledged) {
+        setRemovedRecountAcknowledged(true);
+        setClosingSaveState("idle");
+        setMsg(
+          `⚠️ Removed cash differs from the ${money(
+            targetRemovedCash
+          )} target by ${money(removedVsShouldDiff)}. Recount the removed cash, then submit again if the physical count is correct.`
+        );
+        return false;
+      }
+
+      if (needReason() && !cashDiffReason) {
+        const text = "❌ Choose a cash difference reason after completing the Night recount.";
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
+      if (needReason() && cashDiffReason === "OTHER" && !cashDiffNote.trim()) {
+        const text = "❌ Enter a note when the cash difference reason is Other.";
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
+      const changedExistingPlatforms = platformInstructions.filter((instruction) =>
+        Object.prototype.hasOwnProperty.call(existingPlatformGross, instruction.platform) &&
+        existingPlatformGross[instruction.platform] !== instruction.gross_income
+      );
+
+      let confirmFeeRecalculation = false;
+      if (changedExistingPlatforms.length > 0) {
+        confirmFeeRecalculation = window.confirm(
+          `Changing ${changedExistingPlatforms
+            .map((instruction) => instruction.platform)
+            .join(", ")} will recalculate fees using current fee settings. Continue?`
+        );
+        if (!confirmFeeRecalculation) {
+          setClosingSaveState("idle");
+          setMsg("ℹ️ Daily Close was not submitted. Platform fee recalculation was not confirmed.");
+          return false;
+        }
+      }
+
+      const payload = {
+        business_date: date,
+        store_id: DEFAULT_STORE_ID,
+        night_counts: countsToStoredJson(nightCounts),
+        removed_counts: countsToStoredJson(removedCounts),
+        cash_sales: round2(cashSalesValidation.value),
+        eftpos_sales: round2(eftposSalesValidation.value),
+        cash_difference: {
+          reason: needReason() ? cashDiffReason : "",
+          note: needReason() ? cashDiffNote.trim() : "",
+        },
+        platforms: platformInstructions,
+        expected_night_updated_at: null,
+        confirm_fee_recalculation: confirmFeeRecalculation,
         notes,
-        cashDiffReason: finalCashDiffReason,
-        cashDiffNote: finalCashDiffNote,
-        platforms,
-        platformGrossText,
+      };
+
+      const result = await supabase.rpc("submit_daily_close", {
+        p_payload: payload,
       });
+
+      if (result.error) {
+        const text = "❌ Daily Close failed: " + friendlyRpcError(result.error.message);
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
+      const committed = result.data as DailyCloseResult;
+      localStorage.removeItem(draftKey);
+      setHasNightRecord(true);
+      setNightRevision(committed?.night_updated_at ?? null);
+
+      let reloadResult: LoadExistingResult = {
+        nightExists: false,
+        fullyLoaded: false,
+      };
+      try {
+        reloadResult = await loadExisting({ restoreDraft: false });
+      } catch (reloadError) {
+        console.log("reload committed Daily Close error:", reloadError);
+      }
+
+      if (!reloadResult.fullyLoaded || !reloadResult.nightExists) {
+        setHasNightRecord(true);
+        setNightRevision(committed?.night_updated_at ?? null);
+        setClosingSaveState("saved");
+        setClosingLastSavedAt(new Date().toISOString());
+        setMsg(
+          "⚠️ Daily Close was submitted successfully, but some saved data could not be reloaded. Do not submit again. Please refresh the page."
+        );
+        return true;
+      }
 
       setClosingDirty(false);
       setClosingSaveState("saved");
       setClosingLastSavedAt(new Date().toISOString());
-      localStorage.removeItem(draftKey);
-
-      if (!options?.silent) {
-        setMsg("✅ Closing saved! (cashup + sales + platforms refreshed)");
-      }
-
-      if (options?.silent) {
-        lastAutoSaveKeyRef.current = autoSaveKey;
-      }
+      setMsg("✅ Daily Close submitted successfully. Authoritative server data has been reloaded.");
 
       return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown Daily Close error";
+      const text = "❌ Daily Close failed: " + friendlyRpcError(message);
+      setMsg(text);
+      setClosingSaveState("error");
+      setClosingSaveError(text);
+      return false;
     } finally {
       closingSavingRef.current = false;
-      if (!options?.silent) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   }
 
   useEffect(() => {
     if (!initialLoadDoneRef.current) return;
+    if (hasNightRecord) return;
 
     const draft = {
       cashSalesText,
@@ -811,7 +1080,6 @@ export default function DailyEntryPage() {
       removedCounts,
       cashDiffReason,
       cashDiffNote,
-      hasMorningRecord,
     };
 
     localStorage.setItem(draftKey, JSON.stringify(draft));
@@ -826,45 +1094,7 @@ export default function DailyEntryPage() {
     removedCounts,
     cashDiffReason,
     cashDiffNote,
-    hasMorningRecord,
-  ]);
-
-  useEffect(() => {
-    if (!initialLoadDoneRef.current) return;
-    if (!morningDirty) return;
-    if (!isStoreDevice || storeAccessLoading) return;
-
-    const timer = setTimeout(() => {
-      saveMorning({ silent: true });
-    }, AUTO_SAVE_DELAY);
-
-    return () => clearTimeout(timer);
-  }, [morningDirty, morningCounts, date, isStoreDevice, storeAccessLoading]);
-
-  useEffect(() => {
-    if (!initialLoadDoneRef.current) return;
-    if (!closingDirty) return;
-    if (!isStoreDevice || storeAccessLoading) return;
-    if (closingSavingRef.current) return;
-
-    const timer = setTimeout(() => {
-      saveClosingAndSales({ silent: true });
-    }, AUTO_SAVE_DELAY);
-
-    return () => clearTimeout(timer);
-  }, [
-    closingDirty,
-    nightCounts,
-    removedCounts,
-    cashSalesText,
-    eftposSalesText,
-    notes,
-    cashDiffReason,
-    cashDiffNote,
-    platformGrossText,
-    date,
-    isStoreDevice,
-    storeAccessLoading,
+    hasNightRecord,
   ]);
 
   useEffect(() => {
@@ -880,7 +1110,7 @@ export default function DailyEntryPage() {
 
   function handleBackHome() {
     if (morningDirty || closingDirty || morningSavingRef.current || closingSavingRef.current) {
-      setMsg("❌ You have unsaved changes. Please wait for auto-save or save manually before going back home.");
+      setMsg("❌ You have unsaved changes. Save them or refresh to discard them before going back home.");
       return;
     }
     window.location.href = "/staff/home";
@@ -1061,8 +1291,8 @@ export default function DailyEntryPage() {
 
   function renderDenomGrid(
     counts: CashCounts,
-    setCounts: any,
-    section: "morning" | "closing"
+    setCounts: React.Dispatch<React.SetStateAction<CashCounts>>,
+    section: "morning" | "night" | "removed"
   ) {
     return (
       <div
@@ -1097,8 +1327,9 @@ export default function DailyEntryPage() {
             </div>
 
             <input
-              value={(counts as any)[key] ?? ""}
+              value={counts[key] ?? ""}
               onChange={(e) => setCountsField(setCounts, key, e.target.value, section)}
+              disabled={pageReadOnly}
               style={{
                 width: 68,
                 padding: "8px 10px",
@@ -1115,7 +1346,7 @@ export default function DailyEntryPage() {
     );
   }
 
-  const pageReadOnly = !isStoreDevice;
+  const pageReadOnly = !isStoreDevice || hasNightRecord;
 
   return (
     <div
@@ -1180,9 +1411,25 @@ export default function DailyEntryPage() {
           {storeAccessLoading
             ? "Checking store device access..."
             : isStoreDevice
-            ? "✅ Store device/network verified. Auto-save is enabled."
+            ? "✅ Store device/network verified. Draft changes stay in this browser until you explicitly submit."
             : `⚠️ Not on approved store device/network${detectedIp ? ` (IP: ${detectedIp})` : ""}. Saving is disabled.`}
         </div>
+
+        {hasNightRecord && (
+          <div
+            style={{
+              border: "1px solid #BFDBFE",
+              background: "#EFF6FF",
+              padding: "12px 14px",
+              borderRadius: 12,
+              marginBottom: 16,
+              color: TEXT,
+            }}
+          >
+            <b>Daily Close submitted.</b> This page is read-only for the selected date.
+            {nightRevision ? ` Revision: ${nightRevision}` : ""}
+          </div>
+        )}
 
         {msg && (
           <div
@@ -1203,25 +1450,37 @@ export default function DailyEntryPage() {
           "Morning Cashup (Open)",
           <>
             <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
-              Count the cash in till when opening. If no morning cashup is saved, system uses default baseline{" "}
-              <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>.
+              Count the actual cash physically in the till when opening. The target float is{" "}
+              <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>, but an over/short count is saved as counted after you recount it.
             </div>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
               {moneyBadge("Morning total", money(morningTotal))}
               {moneyBadge(
-                hasMorningRecord ? "Saved baseline used" : "Default baseline used",
-                money(hasMorningRecord ? morningTotal : DEFAULT_FLOAT_IF_NO_MORNING),
+                "Difference from $400 target",
+                money(round2(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING)),
+                Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) < EPS ? "#15803D" : WAK_RED
+              )}
+              {moneyBadge(
+                hasMorningRecord ? "Saved opening float" : "Close fallback if not saved",
+                money(baselineMorningTotal),
                 hasMorningRecord ? WAK_BLUE : WAK_RED
               )}
             </div>
+
+            {morningRecountAcknowledged &&
+              Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) >= EPS && (
+                <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
+                  Recount acknowledged. Save again to preserve the actual {money(morningTotal)} opening count.
+                </div>
+              )}
 
             {renderDenomGrid(morningCounts, setMorningCounts, "morning")}
 
             <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
               {actionButton("Save Morning Cashup", () => saveMorning(), {
                 primary: true,
-                disabled: loading || pageReadOnly || storeAccessLoading,
+                disabled: loading || pageReadOnly || storeAccessLoading || morningSavingRef.current,
               })}
             </div>
           </>,
@@ -1232,17 +1491,30 @@ export default function DailyEntryPage() {
           "Closing Cashup (Close)",
           <>
             <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
-              Cash to remove is calculated as <b>Night total − Morning total</b>. If no morning record exists, baseline is{" "}
+              Daily cash movement uses <b>Night total − actual saved Morning float</b>. Cash removal separately targets a fixed closing float of{" "}
               <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>.
             </div>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
               {moneyBadge("Night total", money(nightTotal))}
-              {moneyBadge("Baseline morning used", money(baselineMorningTotal))}
-              {moneyBadge("Cash to remove", money(cashToRemove), WAK_BLUE)}
+              {moneyBadge("Actual opening float", money(baselineMorningTotal))}
+              {moneyBadge("Counted daily cash movement", money(countedDailyCashMovement), WAK_BLUE)}
+              {moneyBadge("Target cash to remove", money(targetRemovedCash), WAK_BLUE)}
             </div>
 
-            {renderDenomGrid(nightCounts, setNightCounts, "closing")}
+            {nightTotal < DEFAULT_FLOAT_IF_NO_MORNING && (
+              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
+                The Night till is {money(DEFAULT_FLOAT_IF_NO_MORNING - nightTotal)} below the required next-day float. Target removed cash is {money(0)}.
+              </div>
+            )}
+
+            {nightRecountAcknowledged && needReason() && (
+              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
+                Night recount acknowledged. Record a cash difference reason below before submitting.
+              </div>
+            )}
+
+            {renderDenomGrid(nightCounts, setNightCounts, "night")}
           </>,
           saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
         )}
@@ -1256,14 +1528,27 @@ export default function DailyEntryPage() {
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
               {moneyBadge("Removed total", money(removedTotal))}
+              {moneyBadge("Target removed cash", money(targetRemovedCash))}
               {moneyBadge(
-                "Removed − Should remove",
+                "Removed − target",
                 money(removedVsShouldDiff),
                 Math.abs(removedVsShouldDiff) < EPS ? "#15803D" : WAK_RED
               )}
+              {moneyBadge("Projected closing float", money(projectedClosingFloat))}
+              {moneyBadge(
+                "Closing float difference",
+                money(closingFloatVariance),
+                Math.abs(closingFloatVariance) < EPS ? "#15803D" : WAK_RED
+              )}
             </div>
 
-            {renderDenomGrid(removedCounts, setRemovedCounts, "closing")}
+            {removedRecountAcknowledged && Math.abs(removedVsShouldDiff) >= EPS && (
+              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
+                Removed-cash recount acknowledged. Submission will preserve the actual physical count and its closing-float difference.
+              </div>
+            )}
+
+            {renderDenomGrid(removedCounts, setRemovedCounts, "removed")}
           </>
         )}
 
@@ -1276,6 +1561,7 @@ export default function DailyEntryPage() {
               </div>
               <input
                 value={cashSalesText}
+                disabled={pageReadOnly}
                 onChange={(e) => {
                   setCashSalesText(e.target.value);
                   markClosingDirtyStyleOnly();
@@ -1299,6 +1585,7 @@ export default function DailyEntryPage() {
               </div>
               <input
                 value={eftposSalesText}
+                disabled={pageReadOnly}
                 onChange={(e) => {
                   setEftposSalesText(e.target.value);
                   markClosingDirtyStyleOnly();
@@ -1316,18 +1603,12 @@ export default function DailyEntryPage() {
               />
             </div>
 
-            <div style={{ marginBottom: 16 }}>
-              {actionButton("Set Cash Sales = Should Remove", useCashToRemoveAsCashSales, {
-                disabled: loading || pageReadOnly || storeAccessLoading,
-              })}
-            </div>
-
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
               {moneyBadge("Instore subtotal", money(instoreSubtotal))}
               {moneyBadge(
-                "Actual cash sales − Should remove",
-                money(actualCashVsShouldDiff),
-                Math.abs(actualCashVsShouldDiff) < EPS ? "#15803D" : WAK_RED
+                "POS cash − counted movement",
+                money(cashVariance),
+                Math.abs(cashVariance) < EPS ? "#15803D" : WAK_RED
               )}
             </div>
 
@@ -1337,6 +1618,7 @@ export default function DailyEntryPage() {
               </div>
               <textarea
                 value={notes}
+                disabled={pageReadOnly}
                 onChange={(e) => {
                   setNotes(e.target.value);
                   markClosingDirtyStyleOnly();
@@ -1366,15 +1648,16 @@ export default function DailyEntryPage() {
             >
               <div style={{ fontWeight: 700, color: TEXT, marginBottom: 8 }}>Cash Difference Check</div>
               <div style={{ color: MUTED, marginBottom: needReason() ? 12 : 0 }}>
-                If this difference is not zero, the system will auto-fill a default reason if staff leave it blank.
+                If the difference is not zero, recount the Night till first. After confirming the recount, choose the actual reason; no reason is generated automatically.
               </div>
 
-              {needReason() && (
+              {needReason() && (nightRecountAcknowledged || hasNightRecord) && (
                 <>
                   <div style={{ marginBottom: 12 }}>
                     <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>Reason</div>
                     <select
                       value={cashDiffReason}
+                      disabled={pageReadOnly}
                       onChange={(e) => {
                         setCashDiffReason(e.target.value as CashDiffReason);
                         markClosingDirtyStyleOnly();
@@ -1389,7 +1672,7 @@ export default function DailyEntryPage() {
                         background: "#fff",
                       }}
                     >
-                      <option value="">-- Auto if left blank --</option>
+                      <option value="">-- Select a reason --</option>
                       <option value="FLOAT_CHANGED">Cash left in till / float changed</option>
                       <option value="CASH_REFUND_OR_PAYOUT">Cash paid out / refunds</option>
                       <option value="CASH_DROP_NOT_COUNTED">Cash drop not counted (safe/other)</option>
@@ -1401,10 +1684,11 @@ export default function DailyEntryPage() {
 
                   <div>
                     <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
-                      Note {cashDiffReason === "OTHER" ? "(optional, auto-filled if blank)" : "(optional)"}
+                      Note {cashDiffReason === "OTHER" ? "(required)" : "(optional)"}
                     </div>
                     <input
                       value={cashDiffNote}
+                      disabled={pageReadOnly}
                       onChange={(e) => {
                         setCashDiffNote(e.target.value);
                         markClosingDirtyStyleOnly();
@@ -1449,12 +1733,14 @@ export default function DailyEntryPage() {
                     }}
                   >
                     <div style={{ fontSize: 13, color: TEXT, fontWeight: 700, marginBottom: 8 }}>
-                      {p.name}
+                      {p.name} {!p.is_active ? "(historical/inactive)" : ""}
                     </div>
                     <input
-                      value={platformGrossText[p.name] ?? ""}
+                      value={platformGrossText[canonicalPlatformName(p.name)] ?? ""}
+                      disabled={pageReadOnly}
                       onChange={(e) => {
-                        setPlatformGrossText((prev) => ({ ...prev, [p.name]: e.target.value }));
+                        const canonicalName = canonicalPlatformName(p.name);
+                        setPlatformGrossText((prev) => ({ ...prev, [canonicalName]: e.target.value }));
                         markClosingDirtyStyleOnly();
                       }}
                       style={{
@@ -1493,9 +1779,9 @@ export default function DailyEntryPage() {
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              {actionButton("Save Closing (Cashup + Sales)", () => saveClosingAndSales(), {
+              {actionButton("Submit Daily Close", () => saveClosingAndSales(), {
                 primary: true,
-                disabled: loading || pageReadOnly || storeAccessLoading,
+                disabled: loading || pageReadOnly || storeAccessLoading || closingSavingRef.current,
               })}
             </div>
           </>,
