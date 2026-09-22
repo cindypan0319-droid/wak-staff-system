@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
 
 type Platform = {
   id: number;
@@ -59,6 +60,7 @@ function button(label: string, onClick: () => void, primary?: boolean, disabled?
 
 export default function PlatformsPage() {
   const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
   const [viewerRole, setViewerRole] = useState<string | null>(null);
 
   const isOwner = viewerRole === "OWNER";
@@ -80,29 +82,28 @@ export default function PlatformsPage() {
   async function loadPermission() {
     setAuthLoading(true);
     setMsg("");
+    setAuthError("");
 
-    const { data } = await supabase.auth.getUser();
-    const user = data?.user;
-
-    if (!user) {
-      window.location.href = "/";
-      return;
-    }
-
-    const { data: profile, error } = await supabase
-      .from("profiles")
-      .select("id, role")
-      .eq("id", user.id)
-      .single();
-
-    if (error) {
-      setViewerRole(null);
-      setMsg("Cannot load role");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
       setAuthLoading(false);
       return;
     }
 
-    setViewerRole((profile as any)?.role ?? null);
+    if (userResult.status === "unauthenticated") {
+      window.location.href = "/";
+      return;
+    }
+
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      setAuthLoading(false);
+      return;
+    }
+
+    setViewerRole(profileResult.status === "loaded" ? profileResult.profile.role : null);
     setAuthLoading(false);
   }
 
@@ -232,6 +233,10 @@ export default function PlatformsPage() {
   }
 
   if (authLoading) return <div style={{ padding: 20 }}>Loading...</div>;
+
+  if (authError) return <div style={{ padding: 20 }}>
+    {authError} <button type="button" onClick={() => { void loadPermission(); }}>Retry</button>
+  </div>;
 
   if (!isManagerOrOwner) {
     return (

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
 
 export default function ManagerCreateStaffPage() {
   const [meRole, setMeRole] = useState<string | null>(null);
+  const [authError, setAuthError] = useState("");
 
   const [fullName, setFullName] = useState("");
   const [preferredName, setPreferredName] = useState("");
@@ -13,14 +15,23 @@ export default function ManagerCreateStaffPage() {
   const [msg, setMsg] = useState("");
 
   async function guardOwnerManager() {
-    const { data } = await supabase.auth.getUser();
-    const uid = data.user?.id;
-    if (!uid) {
+    setAuthError("");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
+      return;
+    }
+    if (userResult.status === "unauthenticated") {
       window.location.href = "/";
       return;
     }
-    const p = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
-    const r = (p.data as any)?.role ?? null;
+
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      return;
+    }
+    const r = profileResult.status === "loaded" ? profileResult.profile.role : null;
     setMeRole(r);
 
     if (!(r === "OWNER" || r === "MANAGER")) {
@@ -76,7 +87,10 @@ export default function ManagerCreateStaffPage() {
   }
 
   if (!(meRole === "OWNER" || meRole === "MANAGER")) {
-    return <div style={{ padding: 20 }}>Checking access…</div>;
+    return <div style={{ padding: 20 }}>
+      {authError || "Checking access…"}
+      {authError && <button type="button" onClick={() => { void guardOwnerManager(); }}>Retry</button>}
+    </div>;
   }
 
   return (

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
 
 type Role = "OWNER" | "MANAGER" | "STAFF";
 type Filter = "ACTIVE" | "INACTIVE" | "ALL";
@@ -203,6 +204,7 @@ export default function EmployeesPage() {
   const [lifecycleTarget, setLifecycleTarget] = useState<{ row: Row; nextActive: boolean } | null>(null);
   const [lifecycleLoading, setLifecycleLoading] = useState(false);
   const [lifecycleError, setLifecycleError] = useState("");
+  const [authError, setAuthError] = useState("");
 
   const getAccessToken = useCallback(async () => {
     const { data } = await supabase.auth.getSession();
@@ -238,15 +240,23 @@ export default function EmployeesPage() {
   }, [getAccessToken]);
 
   const guardRole = useCallback(async () => {
-    const { data } = await supabase.auth.getUser();
-    const uid = data.user?.id;
-    if (!uid) {
+    setAuthError("");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
+      return false;
+    }
+    if (userResult.status === "unauthenticated") {
       window.location.href = "/";
       return false;
     }
 
-    const profile = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
-    const role = profile.data?.role as Role | undefined;
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      return false;
+    }
+    const role = profileResult.status === "loaded" ? profileResult.profile.role : null;
     if (!(role === "OWNER" || role === "MANAGER")) {
       window.location.href = "/";
       return false;
@@ -460,7 +470,10 @@ export default function EmployeesPage() {
     }
   }
 
-  if (!meRole) return <div style={{ padding: 20 }}>Checking access…</div>;
+  if (!meRole) return <div style={{ padding: 20 }}>
+    {authError || "Checking access…"}
+    {authError && <button type="button" onClick={() => { void guardRole().then((allowed) => { if (allowed) void load(); }); }}>Retry</button>}
+  </div>;
 
   return (
     <div style={{ minHeight: "100vh", background: WAK_BG, padding: 20 }}>

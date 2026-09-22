@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../../lib/authGuard";
 import { useRouter } from "next/router";
 
 type ProfileRow = {
@@ -158,20 +159,28 @@ export default function EmployeeDetailsPage() {
   const [details, setDetails] = useState<DetailRow | null>(null);
 
   const [msg, setMsg] = useState("");
+  const [authError, setAuthError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   
   async function guard() {
-    const { data } = await supabase.auth.getUser();
-    const uid = data.user?.id;
-
-    if (!uid) {
+    setAuthError("");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
+      return false;
+    }
+    if (userResult.status === "unauthenticated") {
       window.location.href = "/";
       return false;
     }
 
-    const pr = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
-    const r = (pr.data as any)?.role;
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      return false;
+    }
+    const r = profileResult.status === "loaded" ? profileResult.profile.role : null;
 
     if (!(r === "OWNER" || r === "MANAGER")) {
       window.location.href = "/";
@@ -247,19 +256,19 @@ export default function EmployeeDetailsPage() {
     }
   }
 
+  async function checkAndLoad() {
+    const ok = await guard();
+    if (!ok) return;
+
+    const parts = window.location.pathname.split("/");
+    const id = parts[parts.length - 1] || "";
+    setStaffId(id);
+
+    if (id) await load(id);
+  }
+
   useEffect(() => {
-    (async () => {
-      const ok = await guard();
-      if (!ok) return;
-
-      const parts = window.location.pathname.split("/");
-      const id = parts[parts.length - 1] || "";
-      setStaffId(id);
-
-      if (id) {
-        await load(id);
-      }
-    })();
+    void checkAndLoad();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -323,6 +332,10 @@ export default function EmployeeDetailsPage() {
       setLoading(false);
     }
   }
+
+  if (authError) return <div style={{ padding: 20 }}>
+    {authError} <button type="button" onClick={() => { void checkAndLoad(); }}>Retry</button>
+  </div>;
 
   return (
     <div

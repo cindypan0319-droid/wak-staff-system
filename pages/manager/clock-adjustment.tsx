@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
 
 type Range = { startISO: string; endISO: string };
 
@@ -455,6 +456,7 @@ function payClassLabel(c: PayClass) {
 
 export default function ClockAdjustmentPage() {
   const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
   const [viewerRole, setViewerRole] = useState<string | null>(null);
   const [viewerId, setViewerId] = useState<string | null>(null);
 
@@ -487,25 +489,29 @@ export default function ClockAdjustmentPage() {
 
   async function loadPermission() {
     setAuthLoading(true);
-    const { data } = await supabase.auth.getUser();
-    const user = data?.user;
-
-    if (!user) {
-      window.location.href = "/";
-      return;
-    }
-
-    setViewerId(user.id);
-
-    const { data: profile, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
-
-    if (error) {
-      setViewerRole(null);
+    setAuthError("");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
       setAuthLoading(false);
       return;
     }
 
-    setViewerRole((profile as any)?.role ?? null);
+    if (userResult.status === "unauthenticated") {
+      window.location.href = "/";
+      return;
+    }
+
+    setViewerId(userResult.user.id);
+
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      setAuthLoading(false);
+      return;
+    }
+
+    setViewerRole(profileResult.status === "loaded" ? profileResult.profile.role : null);
     setAuthLoading(false);
   }
 
@@ -1528,6 +1534,10 @@ export default function ClockAdjustmentPage() {
       </div>
     );
   }
+
+  if (authError) return <div style={{ padding: 20 }}>
+    {authError} <button type="button" onClick={() => { void loadPermission(); }}>Retry</button>
+  </div>;
 
   if (!isManagerOrOwner) {
     return (

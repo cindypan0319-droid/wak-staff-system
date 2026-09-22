@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../../../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../../../lib/authGuard";
 
 type ProfileRow = {
   id: string;
@@ -42,6 +43,7 @@ export default function EmployeeEditPage() {
   const staffId = String(router.query.id ?? "");
 
   const [meRole, setMeRole] = useState<string | null>(null);
+  const [authError, setAuthError] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -60,14 +62,23 @@ export default function EmployeeEditPage() {
   const age = useMemo(() => calcAge(birthDate || null), [birthDate]);
 
   async function guardRole() {
-    const { data } = await supabase.auth.getUser();
-    const uid = data.user?.id;
-    if (!uid) {
+    setAuthError("");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
+      return;
+    }
+    if (userResult.status === "unauthenticated") {
       window.location.href = "/";
       return;
     }
-    const p = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
-    const role = (p.data as any)?.role ?? null;
+
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      return;
+    }
+    const role = profileResult.status === "loaded" ? profileResult.profile.role : null;
     setMeRole(role);
 
     if (!(role === "OWNER" || role === "MANAGER")) {
@@ -192,7 +203,10 @@ export default function EmployeeEditPage() {
   }, [router.isReady, staffId]);
 
   if (meRole !== "OWNER" && meRole !== "MANAGER") {
-    return <div style={{ padding: 20 }}>Checking access…</div>;
+    return <div style={{ padding: 20 }}>
+      {authError || "Checking access…"}
+      {authError && <button type="button" onClick={() => { void guardRole(); }}>Retry</button>}
+    </div>;
   }
 
   return (
