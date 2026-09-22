@@ -33,22 +33,27 @@ export default function Home() {
 
   const clearBrokenSession = useCallback(async () => {
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        console.warn("LOGIN_SESSION_CHECK_READ_ERROR");
+        return;
+      }
       const session = sessionData.session;
 
       if (!session) return;
 
       const { data: userData, error } = await supabase.auth.getUser();
 
-      if (error || !userData.user) {
+      if (error) {
+        console.warn("LOGIN_SESSION_CHECK_READ_ERROR");
+        return;
+      }
+
+      if (!userData.user) {
         await supabase.auth.signOut({ scope: "local" });
       }
     } catch {
-      try {
-        await supabase.auth.signOut({ scope: "local" });
-      } catch {
-        // ignore
-      }
+      console.warn("LOGIN_SESSION_CHECK_READ_ERROR");
     }
   }, []);
 

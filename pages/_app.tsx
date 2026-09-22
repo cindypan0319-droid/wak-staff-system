@@ -9,15 +9,25 @@ export default function App({ Component, pageProps }: AppProps) {
 
   useEffect(() => {
     let mounted = true;
+    let authEpoch = 0;
+    let checkRunning = false;
+    let checkPending = false;
+    let scheduledCheck: ReturnType<typeof setTimeout> | null = null;
 
-    async function checkActive() {
+    async function checkActive(isCurrent: () => boolean) {
       try {
-        const { data } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getUser();
+        if (!isCurrent()) return;
+        if (error) {
+          console.warn("APP_ACTIVE_CHECK_READ_ERROR");
+          setChecking(false);
+          return;
+        }
         const uid = data.user?.id;
 
         // Not logged in -> no need to check
         if (!uid) {
-          if (mounted) setChecking(false);
+          setChecking(false);
           return;
         }
 
@@ -27,11 +37,18 @@ export default function App({ Component, pageProps }: AppProps) {
           .eq("id", uid)
           .maybeSingle();
 
-        const isActive = (p.data as any)?.is_active;
+        if (!isCurrent()) return;
+        if (p.error) {
+          console.warn("APP_ACTIVE_CHECK_READ_ERROR");
+          setChecking(false);
+          return;
+        }
+
+        const isActive = (p.data as { is_active?: boolean | null } | null)?.is_active;
 
         // If user has no profile row yet, allow (during dev)
         if (isActive === undefined || isActive === null) {
-          if (mounted) setChecking(false);
+          setChecking(false);
           return;
         }
 
@@ -42,22 +59,51 @@ export default function App({ Component, pageProps }: AppProps) {
           return;
         }
 
-        if (mounted) setChecking(false);
+        setChecking(false);
       } catch {
         // if error, do not block the app
-        if (mounted) setChecking(false);
+        if (isCurrent()) {
+          console.warn("APP_ACTIVE_CHECK_READ_ERROR");
+          setChecking(false);
+        }
       }
     }
 
-    checkActive();
+    const runChecks = async () => {
+      if (checkRunning || !mounted) return;
+      checkRunning = true;
+      try {
+        while (mounted && checkPending) {
+          checkPending = false;
+          const epoch = authEpoch;
+          await checkActive(() => mounted && epoch === authEpoch);
+        }
+      } finally {
+        checkRunning = false;
+      }
+    };
+
+    const requestCheck = () => {
+      checkPending = true;
+      if (checkRunning || scheduledCheck !== null) return;
+      scheduledCheck = setTimeout(() => {
+        scheduledCheck = null;
+        void runChecks();
+      }, 0);
+    };
+
+    requestCheck();
 
     // Also re-check whenever auth state changes (login/logout)
     const { data: sub } = supabase.auth.onAuthStateChange(() => {
-      checkActive();
+      authEpoch++;
+      requestCheck();
     });
 
     return () => {
       mounted = false;
+      authEpoch++;
+      if (scheduledCheck !== null) clearTimeout(scheduledCheck);
       sub.subscription.unsubscribe();
     };
   }, []);
