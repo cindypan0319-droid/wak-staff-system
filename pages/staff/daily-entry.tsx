@@ -30,6 +30,8 @@ type LoadExistingResult = {
   fullyLoaded: boolean;
 };
 
+type NightReadStatus = "loading" | "loaded" | "error";
+
 type CashCounts = {
   note100: number | null;
   note50: number | null;
@@ -327,6 +329,10 @@ export default function DailyEntryPage() {
   const [hasMorningRecord, setHasMorningRecord] = useState(false);
   const [savedMorningTotal, setSavedMorningTotal] = useState(DEFAULT_FLOAT_IF_NO_MORNING);
   const [hasNightRecord, setHasNightRecord] = useState(false);
+  const [nightRead, setNightRead] = useState<{ date: string; status: NightReadStatus }>(
+    { date, status: "loading" }
+  );
+  const nightReadStatus = nightRead.date === date ? nightRead.status : "loading";
   const [nightRevision, setNightRevision] = useState<string | null>(null);
   const [morningRecountAcknowledged, setMorningRecountAcknowledged] = useState(false);
   const [nightRecountAcknowledged, setNightRecountAcknowledged] = useState(false);
@@ -543,6 +549,7 @@ export default function DailyEntryPage() {
 
     setLoading(true);
     setMsg("");
+    setNightRead({ date, status: "loading" });
     initialLoadDoneRef.current = false;
 
     try {
@@ -641,9 +648,13 @@ export default function DailyEntryPage() {
         .eq("session_type", "NIGHT")
         .maybeSingle();
 
-      const nightLoaded = !n.error || n.error.code === "PGRST116";
+      const nightLoaded = !n.error;
+      setNightRead({ date, status: nightLoaded ? "loaded" : "error" });
       if (!nightLoaded) {
-        loadErrors.push("Cannot load closing cashup: " + n.error.message);
+        loadErrors.push(
+          "We couldn't verify whether this day has already been closed. Please try again before making changes. "
+          + n.error.message
+        );
       }
 
       const serverNightCounts = n.data
@@ -681,8 +692,10 @@ export default function DailyEntryPage() {
           ? calcTotal(serverMorningCounts)
           : DEFAULT_FLOAT_IF_NO_MORNING
       );
-      setHasNightRecord(!!n.data);
-      setNightRevision(n.data?.updated_at ?? null);
+      if (nightLoaded) {
+        setHasNightRecord(!!n.data);
+        setNightRevision(n.data?.updated_at ?? null);
+      }
       setMorningCounts(serverMorningCounts);
       setNightCounts(serverNightCounts);
       setRemovedCounts(serverRemovedCounts);
@@ -758,6 +771,13 @@ export default function DailyEntryPage() {
         nightExists: nightLoaded && !!n.data,
         fullyLoaded,
       };
+    } catch (error) {
+      setNightRead({ date, status: "error" });
+      setMsg(
+        "❌ We couldn't verify whether this day has already been closed. Please try again before making changes. "
+        + (error instanceof Error ? error.message : "Unexpected load failure")
+      );
+      return { nightExists: false, fullyLoaded: false };
     } finally {
       setLoading(false);
       initialLoadDoneRef.current = true;
@@ -780,6 +800,14 @@ export default function DailyEntryPage() {
     setMorningSaveError("");
 
     try {
+      if (nightReadStatus !== "loaded") {
+        const text = "❌ We couldn't verify whether this day has already been closed. Please try again before making changes.";
+        setMsg(text);
+        setMorningSaveState("error");
+        setMorningSaveError(text);
+        return false;
+      }
+
       if (!isStoreDevice) {
         const text = "❌ Daily entry can only be saved on the store device / store network.";
         setMsg(text);
@@ -863,6 +891,14 @@ export default function DailyEntryPage() {
     setClosingSaveError("");
 
     try {
+      if (nightReadStatus !== "loaded") {
+        const text = "❌ We couldn't verify whether this day has already been closed. Please try again before making changes.";
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
       if (!isStoreDevice) {
         const text = "❌ Daily entry can only be saved on the store device / store network.";
         setMsg(text);
@@ -1068,6 +1104,7 @@ export default function DailyEntryPage() {
 
   useEffect(() => {
     if (!initialLoadDoneRef.current) return;
+    if (nightReadStatus !== "loaded") return;
     if (hasNightRecord) return;
 
     const draft = {
@@ -1095,6 +1132,7 @@ export default function DailyEntryPage() {
     cashDiffReason,
     cashDiffNote,
     hasNightRecord,
+    nightReadStatus,
   ]);
 
   useEffect(() => {
@@ -1346,7 +1384,7 @@ export default function DailyEntryPage() {
     );
   }
 
-  const pageReadOnly = !isStoreDevice || hasNightRecord;
+  const pageReadOnly = !isStoreDevice || hasNightRecord || nightReadStatus !== "loaded";
 
   return (
     <div
@@ -1415,7 +1453,21 @@ export default function DailyEntryPage() {
             : `⚠️ Not on approved store device/network${detectedIp ? ` (IP: ${detectedIp})` : ""}. Saving is disabled.`}
         </div>
 
-        {hasNightRecord && (
+        {nightReadStatus === "loading" && (
+          <div style={{ border: "1px solid #BFDBFE", background: "#EFF6FF", padding: "12px 14px",
+            borderRadius: 12, marginBottom: 16, color: TEXT }}>
+            Checking whether this day has already been closed. Editing and saving are disabled until the check completes.
+          </div>
+        )}
+
+        {nightReadStatus === "error" && (
+          <div style={{ border: "1px solid #FECACA", background: "#FEF2F2", padding: "12px 14px",
+            borderRadius: 12, marginBottom: 16, color: WAK_RED }}>
+            We could not verify whether this day has already been closed. Please use Refresh and try again before making changes.
+          </div>
+        )}
+
+        {nightReadStatus === "loaded" && hasNightRecord && (
           <div
             style={{
               border: "1px solid #BFDBFE",
