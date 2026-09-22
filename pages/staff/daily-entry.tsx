@@ -31,6 +31,7 @@ type LoadExistingResult = {
 };
 
 type NightReadStatus = "loading" | "loaded" | "error";
+type MorningReadStatus = "loading" | "loaded" | "error";
 
 type CashCounts = {
   note100: number | null;
@@ -327,6 +328,10 @@ export default function DailyEntryPage() {
   const [cashDiffNote, setCashDiffNote] = useState<string>("");
 
   const [hasMorningRecord, setHasMorningRecord] = useState(false);
+  const [morningRead, setMorningRead] = useState<{ date: string; status: MorningReadStatus }>(
+    { date, status: "loading" }
+  );
+  const morningReadStatus = morningRead.date === date ? morningRead.status : "loading";
   const [savedMorningTotal, setSavedMorningTotal] = useState(DEFAULT_FLOAT_IF_NO_MORNING);
   const [hasNightRecord, setHasNightRecord] = useState(false);
   const [nightRead, setNightRead] = useState<{ date: string; status: NightReadStatus }>(
@@ -549,6 +554,7 @@ export default function DailyEntryPage() {
 
     setLoading(true);
     setMsg("");
+    setMorningRead({ date, status: "loading" });
     setNightRead({ date, status: "loading" });
     initialLoadDoneRef.current = false;
 
@@ -630,7 +636,8 @@ export default function DailyEntryPage() {
         .eq("session_type", "MORNING")
         .maybeSingle();
 
-      const morningLoaded = !m.error || m.error.code === "PGRST116";
+      const morningLoaded = !m.error;
+      setMorningRead({ date, status: morningLoaded ? "loaded" : "error" });
       if (!morningLoaded) {
         loadErrors.push("Cannot load morning cashup: " + m.error.message);
       }
@@ -772,6 +779,8 @@ export default function DailyEntryPage() {
         fullyLoaded,
       };
     } catch (error) {
+      setMorningRead((current) => current.date === date && current.status === "loaded"
+        ? current : { date, status: "error" });
       setNightRead({ date, status: "error" });
       setMsg(
         "❌ We couldn't verify whether this day has already been closed. Please try again before making changes. "
@@ -857,6 +866,7 @@ export default function DailyEntryPage() {
       morningServerSnapshotRef.current = buildMorningSnapshot(morningCounts);
       setMorningDirty(false);
       setHasMorningRecord(true);
+      setMorningRead({ date, status: "loaded" });
       setSavedMorningTotal(morningTotal);
       setMorningSaveState("saved");
       setMorningLastSavedAt(new Date().toISOString());
@@ -893,6 +903,14 @@ export default function DailyEntryPage() {
     try {
       if (nightReadStatus !== "loaded") {
         const text = "❌ We couldn't verify whether this day has already been closed. Please try again before making changes.";
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
+      if (morningReadStatus !== "loaded") {
+        const text = "❌ We couldn't verify the Morning Cashup for this day. Please refresh and try again before closing the day.";
         setMsg(text);
         setClosingSaveState("error");
         setClosingSaveError(text);
@@ -1513,11 +1531,15 @@ export default function DailyEntryPage() {
                 money(round2(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING)),
                 Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) < EPS ? "#15803D" : WAK_RED
               )}
-              {moneyBadge(
+              {morningReadStatus === "loaded" ? moneyBadge(
                 hasMorningRecord ? "Saved opening float" : "Close fallback if not saved",
                 money(baselineMorningTotal),
                 hasMorningRecord ? WAK_BLUE : WAK_RED
-              )}
+              ) : <div style={{ color: WAK_RED, fontWeight: 700 }}>
+                {morningReadStatus === "error"
+                  ? "Saved Morning Cashup could not be loaded; opening float is unverified."
+                  : "Checking the saved Morning Cashup..."}
+              </div>}
             </div>
 
             {morningRecountAcknowledged &&
@@ -1547,10 +1569,23 @@ export default function DailyEntryPage() {
               <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>.
             </div>
 
+            {morningReadStatus === "loaded" && !hasMorningRecord && (
+              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14, lineHeight: 1.5 }}>
+                No Morning Cashup was recorded for this day. Daily Close will use the default $400 opening float.
+                If the actual opening cash was different, the cash variance may not represent today&apos;s trading accurately.
+              </div>
+            )}
+
+            {morningReadStatus === "error" && (
+              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
+                Morning Cashup could not be loaded. The opening float and cash variance are unverified. Please use Refresh to try again.
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
               {moneyBadge("Night total", money(nightTotal))}
-              {moneyBadge("Actual opening float", money(baselineMorningTotal))}
-              {moneyBadge("Counted daily cash movement", money(countedDailyCashMovement), WAK_BLUE)}
+              {morningReadStatus === "loaded" && moneyBadge("Actual opening float", money(baselineMorningTotal))}
+              {morningReadStatus === "loaded" && moneyBadge("Counted daily cash movement", money(countedDailyCashMovement), WAK_BLUE)}
               {moneyBadge("Target cash to remove", money(targetRemovedCash), WAK_BLUE)}
             </div>
 
@@ -1657,7 +1692,7 @@ export default function DailyEntryPage() {
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
               {moneyBadge("Instore subtotal", money(instoreSubtotal))}
-              {moneyBadge(
+              {morningReadStatus === "loaded" && moneyBadge(
                 "POS cash − counted movement",
                 money(cashVariance),
                 Math.abs(cashVariance) < EPS ? "#15803D" : WAK_RED
@@ -1833,7 +1868,7 @@ export default function DailyEntryPage() {
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               {actionButton("Submit Daily Close", () => saveClosingAndSales(), {
                 primary: true,
-                disabled: loading || pageReadOnly || storeAccessLoading || closingSavingRef.current,
+                disabled: loading || pageReadOnly || morningReadStatus !== "loaded" || storeAccessLoading || closingSavingRef.current,
               })}
             </div>
           </>,
