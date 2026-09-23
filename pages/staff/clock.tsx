@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabaseClient";
 import { theme } from "../../lib/theme";
+import { readCurrentUser } from "../../lib/authGuard";
 
 type Role = "OWNER" | "MANAGER" | "STAFF" | "INACTIVE" | "ANON" | string;
+type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "read_error";
 
 type TimeClockRow = {
   id: number;
@@ -34,6 +36,9 @@ export default function StaffClockPage() {
   const [userName, setUserName] = useState<string>("Unknown");
   const [role, setRole] = useState<Role>("ANON");
   const [msg, setMsg] = useState<string>("");
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
+  const [authError, setAuthError] = useState("");
+  const [authRetryKey, setAuthRetryKey] = useState(0);
 
   const [openShift, setOpenShift] = useState<TimeClockRow | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -67,17 +72,111 @@ export default function StaffClockPage() {
   }, []);
 
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
-      setUserId(session?.user?.id ?? null);
+    let active = true;
+    let authEpoch = 0;
+    let checkRunning = false;
+    let checkPending = false;
+    let scheduledCheck: ReturnType<typeof setTimeout> | null = null;
+
+    const verifyAuth = async (epoch: number) => {
+      const isCurrent = () => active && epoch === authEpoch;
+
+      try {
+        const userResult = await readCurrentUser();
+        if (!isCurrent()) return;
+
+        if (userResult.status === "read_error") {
+          setAuthStatus("read_error");
+          setAuthError("Could not verify your session. Please retry.");
+          return;
+        }
+
+        if (userResult.status === "unauthenticated") {
+          setUserId(null);
+          setUserName("Unknown");
+          setRole("ANON");
+          setAuthStatus("unauthenticated");
+          setAuthError("");
+          return;
+        }
+
+        const uid = userResult.user.id;
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("full_name, preferred_name, role, is_active")
+          .eq("id", uid)
+          .maybeSingle();
+
+        if (!isCurrent()) return;
+        if (error) {
+          setAuthStatus("read_error");
+          setAuthError("Could not verify your employee profile. Please retry.");
+          return;
+        }
+
+        const profile = (data as ProfileRow | null) ?? null;
+        setUserId(uid);
+        setUserName(displayName(profile));
+        setRole(!profile?.is_active ? "INACTIVE" : (profile.role as Role) ?? "ANON");
+        setAuthStatus("authenticated");
+        setAuthError("");
+      } catch {
+        if (isCurrent()) {
+          setAuthStatus("read_error");
+          setAuthError("Could not verify your session or employee profile. Please retry.");
+        }
+      }
+    };
+
+    const runChecks = async () => {
+      if (checkRunning || !active) return;
+      checkRunning = true;
+      try {
+        while (active && checkPending) {
+          checkPending = false;
+          await verifyAuth(authEpoch);
+        }
+      } finally {
+        checkRunning = false;
+      }
+    };
+
+    const requestCheck = () => {
+      checkPending = true;
+      if (!active || checkRunning || scheduledCheck !== null) return;
+      scheduledCheck = setTimeout(() => {
+        scheduledCheck = null;
+        void runChecks();
+      }, 0);
+    };
+
+    requestCheck();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      authEpoch++;
       setMsg("");
+      setAuthError("");
+
+      if (!session?.user) {
+        checkPending = false;
+        setUserId(null);
+        setUserName("Unknown");
+        setRole("ANON");
+        setAuthStatus("unauthenticated");
+        return;
+      }
+
+      setAuthStatus("loading");
+      requestCheck();
     });
 
-    supabase.auth.getSession().then(({ data }) => {
-      setUserId(data.session?.user?.id ?? null);
-    });
-
-    return () => sub.subscription.unsubscribe();
-  }, []);
+    return () => {
+      active = false;
+      authEpoch++;
+      if (scheduledCheck !== null) clearTimeout(scheduledCheck);
+      sub.subscription.unsubscribe();
+    };
+  }, [authRetryKey]);
 
   useEffect(() => {
     async function checkStoreAccess() {
@@ -98,42 +197,6 @@ export default function StaffClockPage() {
 
     checkStoreAccess();
   }, []);
-
-  useEffect(() => {
-    async function loadProfile() {
-      if (!userId) {
-        setRole("ANON");
-        setUserName("Unknown");
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("full_name, preferred_name, role, is_active")
-        .eq("id", userId)
-        .maybeSingle();
-
-      if (error) {
-        console.log("profiles load error:", error);
-        setRole("ANON");
-        setUserName("Unknown");
-        return;
-      }
-
-      const profile = (data as ProfileRow | null) ?? null;
-
-      setUserName(displayName(profile));
-
-      if (!profile?.is_active) {
-        setRole("INACTIVE");
-        return;
-      }
-
-      setRole((profile?.role as Role) ?? "ANON");
-    }
-
-    loadProfile();
-  }, [userId]);
 
   async function refresh() {
     setMsg("");
@@ -246,7 +309,26 @@ export default function StaffClockPage() {
     }
   }
 
-  if (!userId) {
+  if (authStatus === "loading") {
+    return (
+      <div style={{ padding: 20 }}>
+        <h1>Time Clock</h1>
+        <p>Checking your session…</p>
+      </div>
+    );
+  }
+
+  if (authStatus === "read_error") {
+    return (
+      <div style={{ padding: 20 }}>
+        <h1>Time Clock</h1>
+        <p>{authError}</p>
+        <button onClick={() => setAuthRetryKey((value) => value + 1)}>Retry</button>
+      </div>
+    );
+  }
+
+  if (authStatus === "unauthenticated" || !userId) {
     return (
       <div style={{ padding: 20 }}>
         <h1>Time Clock</h1>
