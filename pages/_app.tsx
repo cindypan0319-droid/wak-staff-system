@@ -1,5 +1,6 @@
 import type { AppProps } from "next/app";
 import { useEffect, useState } from "react";
+import { isAuthSessionMissingError } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
 import Head from "next/head";
 import AutoLogout from "../components/AutoLogout";
@@ -19,6 +20,10 @@ export default function App({ Component, pageProps }: AppProps) {
         const { data, error } = await supabase.auth.getUser();
         if (!isCurrent()) return;
         if (error) {
+          if (isAuthSessionMissingError(error)) {
+            setChecking(false);
+            return;
+          }
           console.warn("APP_ACTIVE_CHECK_READ_ERROR");
           setChecking(false);
           return;
@@ -60,9 +65,13 @@ export default function App({ Component, pageProps }: AppProps) {
         }
 
         setChecking(false);
-      } catch {
+      } catch (error) {
         // if error, do not block the app
         if (isCurrent()) {
+          if (isAuthSessionMissingError(error)) {
+            setChecking(false);
+            return;
+          }
           console.warn("APP_ACTIVE_CHECK_READ_ERROR");
           setChecking(false);
         }

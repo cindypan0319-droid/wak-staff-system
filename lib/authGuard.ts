@@ -1,4 +1,4 @@
-import type { User } from "@supabase/supabase-js";
+import { isAuthSessionMissingError, type User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 
 export type CurrentUserRead =
@@ -19,11 +19,17 @@ export type CurrentProfileRead =
 export async function readCurrentUser(): Promise<CurrentUserRead> {
   try {
     const { data, error } = await supabase.auth.getUser();
-    if (error) return { status: "read_error" };
+    if (error) {
+      return isAuthSessionMissingError(error)
+        ? { status: "unauthenticated" }
+        : { status: "read_error" };
+    }
     if (!data.user) return { status: "unauthenticated" };
     return { status: "authenticated", user: data.user };
-  } catch {
-    return { status: "read_error" };
+  } catch (error) {
+    return isAuthSessionMissingError(error)
+      ? { status: "unauthenticated" }
+      : { status: "read_error" };
   }
 }
 

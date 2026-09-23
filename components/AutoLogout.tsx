@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/router";
+import { isAuthSessionMissingError } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
 
 type Role = "OWNER" | "MANAGER" | "STAFF" | "INACTIVE" | "ANON" | string;
@@ -42,6 +43,18 @@ export default function AutoLogout() {
     if (singleLoginIntervalRef.current) {
       clearInterval(singleLoginIntervalRef.current);
       singleLoginIntervalRef.current = null;
+    }
+  }
+
+  function handleConfirmedSignedOut() {
+    clearLogoutTimer();
+    clearSingleLoginInterval();
+    enabledRef.current = false;
+    roleRef.current = "ANON";
+    localStorage.removeItem(SINGLE_LOGIN_STORAGE_KEY);
+
+    if (!PUBLIC_PATHS.includes(router.pathname)) {
+      window.location.href = "/";
     }
   }
 
@@ -89,6 +102,10 @@ export default function AutoLogout() {
       const { data: userData, error: userError } = await supabase.auth.getUser();
       if (!isCurrent() || !enabledRef.current) return;
       if (userError) {
+        if (isAuthSessionMissingError(userError)) {
+          handleConfirmedSignedOut();
+          return;
+        }
         console.warn("AUTOLOGOUT_POLL_READ_ERROR");
         return;
       }
@@ -159,6 +176,11 @@ export default function AutoLogout() {
       const { data: userData, error: userError } = await supabase.auth.getUser();
       if (!isCurrent()) return;
       if (userError) {
+        if (isAuthSessionMissingError(userError)) {
+          onValidated();
+          handleConfirmedSignedOut();
+          return;
+        }
         console.warn("AUTOLOGOUT_ROLE_READ_ERROR");
         onReadError();
         return;
@@ -323,11 +345,7 @@ export default function AutoLogout() {
         clearRoleRetry();
         roleCheckPending = false;
         pollCheckPending = false;
-        enabledRef.current = false;
-        roleRef.current = "ANON";
-        clearLogoutTimer();
-        clearSingleLoginInterval();
-        localStorage.removeItem(SINGLE_LOGIN_STORAGE_KEY);
+        handleConfirmedSignedOut();
         return;
       }
 
