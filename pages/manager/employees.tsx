@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
 
 type Role = "OWNER" | "MANAGER" | "STAFF";
 type Filter = "ACTIVE" | "INACTIVE" | "ALL";
@@ -14,6 +15,10 @@ type Row = {
 };
 
 type ApiResult = { error?: string; rows?: Row[]; staff_id?: string };
+type AccessTokenRead =
+  | { status: "loaded"; accessToken: string }
+  | { status: "missing" }
+  | { status: "read_error" };
 
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
@@ -203,20 +208,32 @@ export default function EmployeesPage() {
   const [lifecycleTarget, setLifecycleTarget] = useState<{ row: Row; nextActive: boolean } | null>(null);
   const [lifecycleLoading, setLifecycleLoading] = useState(false);
   const [lifecycleError, setLifecycleError] = useState("");
+  const [authError, setAuthError] = useState("");
 
-  const getAccessToken = useCallback(async () => {
-    const { data } = await supabase.auth.getSession();
-    return data.session?.access_token ?? null;
+  const getAccessToken = useCallback(async (): Promise<AccessTokenRead> => {
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) return { status: "read_error" };
+      const accessToken = data.session?.access_token;
+      return accessToken ? { status: "loaded", accessToken } : { status: "missing" };
+    } catch {
+      return { status: "read_error" };
+    }
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const accessToken = await getAccessToken();
-      if (!accessToken) {
+      const tokenResult = await getAccessToken();
+      if (tokenResult.status === "read_error") {
+        setMsg("❌ Could not verify your session. Please try again.");
+        return;
+      }
+      if (tokenResult.status === "missing") {
         setMsg("❌ No session. Please login again.");
         return;
       }
+      const { accessToken } = tokenResult;
 
       const response = await fetch("/api/admin/list-profiles", {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -238,15 +255,23 @@ export default function EmployeesPage() {
   }, [getAccessToken]);
 
   const guardRole = useCallback(async () => {
-    const { data } = await supabase.auth.getUser();
-    const uid = data.user?.id;
-    if (!uid) {
+    setAuthError("");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
+      return false;
+    }
+    if (userResult.status === "unauthenticated") {
       window.location.href = "/";
       return false;
     }
 
-    const profile = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
-    const role = profile.data?.role as Role | undefined;
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      return false;
+    }
+    const role = profileResult.status === "loaded" ? profileResult.profile.role : null;
     if (!(role === "OWNER" || role === "MANAGER")) {
       window.location.href = "/";
       return false;
@@ -311,8 +336,14 @@ export default function EmployeesPage() {
 
     setCreateLoading(true);
     try {
-      const accessToken = await getAccessToken();
-      if (!accessToken) return setCreateError("Your session has expired. Please login again.");
+      const tokenResult = await getAccessToken();
+      if (tokenResult.status === "read_error") {
+        return setCreateError("Could not verify your session. Please try again.");
+      }
+      if (tokenResult.status === "missing") {
+        return setCreateError("Your session has expired. Please login again.");
+      }
+      const { accessToken } = tokenResult;
 
       const response = await fetch("/api/admin/create-staff", {
         method: "POST",
@@ -359,8 +390,14 @@ export default function EmployeesPage() {
 
     setEditLoading(true);
     try {
-      const accessToken = await getAccessToken();
-      if (!accessToken) return setEditError("Your session has expired. Please login again.");
+      const tokenResult = await getAccessToken();
+      if (tokenResult.status === "read_error") {
+        return setEditError("Could not verify your session. Please try again.");
+      }
+      if (tokenResult.status === "missing") {
+        return setEditError("Your session has expired. Please login again.");
+      }
+      const { accessToken } = tokenResult;
 
       const response = await fetch("/api/admin/update-profile", {
         method: "POST",
@@ -401,8 +438,14 @@ export default function EmployeesPage() {
 
     setPinLoading(true);
     try {
-      const accessToken = await getAccessToken();
-      if (!accessToken) return setPinError("Your session has expired. Please login again.");
+      const tokenResult = await getAccessToken();
+      if (tokenResult.status === "read_error") {
+        return setPinError("Could not verify your session. Please try again.");
+      }
+      if (tokenResult.status === "missing") {
+        return setPinError("Your session has expired. Please login again.");
+      }
+      const { accessToken } = tokenResult;
 
       const response = await fetch("/api/admin/set-pin", {
         method: "POST",
@@ -434,8 +477,14 @@ export default function EmployeesPage() {
     setLifecycleLoading(true);
 
     try {
-      const accessToken = await getAccessToken();
-      if (!accessToken) return setLifecycleError("Your session has expired. Please login again.");
+      const tokenResult = await getAccessToken();
+      if (tokenResult.status === "read_error") {
+        return setLifecycleError("Could not verify your session. Please try again.");
+      }
+      if (tokenResult.status === "missing") {
+        return setLifecycleError("Your session has expired. Please login again.");
+      }
+      const { accessToken } = tokenResult;
 
       const response = await fetch("/api/admin/update-profile", {
         method: "POST",
@@ -460,7 +509,10 @@ export default function EmployeesPage() {
     }
   }
 
-  if (!meRole) return <div style={{ padding: 20 }}>Checking access…</div>;
+  if (!meRole) return <div style={{ padding: 20 }}>
+    {authError || "Checking access…"}
+    {authError && <button type="button" onClick={() => { void guardRole().then((allowed) => { if (allowed) void load(); }); }}>Retry</button>}
+  </div>;
 
   return (
     <div style={{ minHeight: "100vh", background: WAK_BG, padding: 20 }}>

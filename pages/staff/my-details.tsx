@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentUser } from "../../lib/authGuard";
 
 type DetailRow = {
   staff_id: string;
@@ -32,6 +33,7 @@ function show(v: any) {
 export default function MyDetailsPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
+  const [authError, setAuthError] = useState("");
   const [detail, setDetail] = useState<DetailRow | null>(null);
   const [myName, setMyName] = useState<string>("");
 
@@ -40,13 +42,18 @@ export default function MyDetailsPage() {
   async function load() {
     setLoading(true);
     setMsg("");
+    setAuthError("");
     try {
-      const { data } = await supabase.auth.getUser();
-      const uid = data.user?.id;
-      if (!uid) {
+      const userResult = await readCurrentUser();
+      if (userResult.status === "read_error") {
+        setAuthError("Could not verify your session. Please retry.");
+        return;
+      }
+      if (userResult.status === "unauthenticated") {
         window.location.href = "/";
         return;
       }
+      const uid = userResult.user.id;
 
       const p = await supabase.from("profiles").select("full_name").eq("id", uid).maybeSingle();
       setMyName((p.data as any)?.full_name ?? "");
@@ -77,6 +84,10 @@ export default function MyDetailsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  if (authError) return <div style={{ padding: 20 }}>
+    {authError} <button type="button" onClick={() => { void load(); }}>Retry</button>
+  </div>;
 
   return (
     <div style={{ padding: 20, maxWidth: 800 }}>

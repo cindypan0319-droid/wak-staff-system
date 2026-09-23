@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
 
 type Range = { startISO: string; endISO: string };
 
@@ -315,34 +316,35 @@ function dayTypeLabel(dayType: DayType) {
 
 export default function OwnerStaffSummaryPage() {
   const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
   const [viewerRole, setViewerRole] = useState<string | null>(null);
 
   const isOwner = viewerRole === "OWNER";
 
   async function loadPermission() {
     setAuthLoading(true);
+    setAuthError("");
 
-    const { data } = await supabase.auth.getUser();
-    const user = data?.user;
-
-    if (!user) {
-      window.location.href = "/";
-      return;
-    }
-
-    const { data: profile, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single();
-
-    if (error) {
-      setViewerRole(null);
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
       setAuthLoading(false);
       return;
     }
 
-    setViewerRole((profile as any)?.role ?? null);
+    if (userResult.status === "unauthenticated") {
+      window.location.href = "/";
+      return;
+    }
+
+    const profileResult = await readCurrentProfile(userResult.user.id);
+    if (profileResult.status === "read_error") {
+      setAuthError("Could not verify your role. Please retry.");
+      setAuthLoading(false);
+      return;
+    }
+
+    setViewerRole(profileResult.status === "loaded" ? profileResult.profile.role : null);
     setAuthLoading(false);
   }
 
@@ -748,6 +750,10 @@ export default function OwnerStaffSummaryPage() {
       </div>
     );
   }
+
+  if (authError) return <div style={{ padding: 20 }}>
+    {authError} <button type="button" onClick={() => { void loadPermission(); }}>Retry</button>
+  </div>;
 
   if (!isOwner) {
     return (

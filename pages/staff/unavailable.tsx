@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentUser } from "../../lib/authGuard";
+
+type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "read_error";
 
 function isoToLocalInput(iso: string) {
   const d = new Date(iso);
@@ -18,6 +21,10 @@ function localInputToISO(localVal: string) {
 export default function StaffUnavailablePage() {
   const [email, setEmail] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
+  const [authError, setAuthError] = useState("");
+  const [authRetryKey, setAuthRetryKey] = useState(0);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const [storeId, setStoreId] = useState("MOOROOLBARK");
   const [startAt, setStartAt] = useState(() => {
@@ -35,17 +42,8 @@ export default function StaffUnavailablePage() {
 
   const [myRows, setMyRows] = useState<any[]>([]);
 
-  async function loadMe() {
-    const { data } = await supabase.auth.getSession();
-    setEmail(data.session?.user?.email ?? null);
-  }
-
-  async function loadMyUnavailable() {
+  async function loadMyUnavailable(uid: string) {
     setMsg("");
-    const { data: userData } = await supabase.auth.getUser();
-    const uid = userData.user?.id;
-    if (!uid) return;
-
     const r = await supabase
       .from("staff_unavailability")
       .select("id, store_id, start_at, end_at, reason, created_at")
@@ -62,24 +60,104 @@ export default function StaffUnavailablePage() {
   }
 
   useEffect(() => {
-    loadMe();
-    supabase.auth.onAuthStateChange(() => loadMe());
-  }, []);
+    let active = true;
+    let authEpoch = 0;
+    let checkRunning = false;
+    let checkPending = false;
+    let scheduledCheck: ReturnType<typeof setTimeout> | null = null;
+
+    const verifyAuth = async (epoch: number) => {
+      const isCurrent = () => active && epoch === authEpoch;
+      const userResult = await readCurrentUser();
+      if (!isCurrent()) return;
+
+      if (userResult.status === "read_error") {
+        setAuthStatus("read_error");
+        setAuthError("Could not verify your session. Please retry.");
+        return;
+      }
+
+      if (userResult.status === "unauthenticated") {
+        setEmail(null);
+        setCurrentUserId(null);
+        setAuthStatus("unauthenticated");
+        setAuthError("");
+        return;
+      }
+
+      setEmail(userResult.user.email ?? null);
+      setCurrentUserId(userResult.user.id);
+      setAuthStatus("authenticated");
+      setAuthError("");
+    };
+
+    const runChecks = async () => {
+      if (checkRunning || !active) return;
+      checkRunning = true;
+      try {
+        while (active && checkPending) {
+          checkPending = false;
+          await verifyAuth(authEpoch);
+        }
+      } finally {
+        checkRunning = false;
+      }
+    };
+
+    const requestCheck = () => {
+      checkPending = true;
+      if (!active || checkRunning || scheduledCheck !== null) return;
+      scheduledCheck = setTimeout(() => {
+        scheduledCheck = null;
+        void runChecks();
+      }, 0);
+    };
+
+    requestCheck();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      authEpoch++;
+      setAuthError("");
+
+      if (!session?.user) {
+        checkPending = false;
+        setEmail(null);
+        setCurrentUserId(null);
+        setAuthStatus("unauthenticated");
+        return;
+      }
+
+      setEmail(session.user.email ?? null);
+      setCurrentUserId(null);
+      setAuthStatus("loading");
+      requestCheck();
+    });
+
+    return () => {
+      active = false;
+      authEpoch++;
+      if (scheduledCheck !== null) clearTimeout(scheduledCheck);
+      sub.subscription.unsubscribe();
+    };
+  }, [authRetryKey]);
 
   useEffect(() => {
-    if (email) loadMyUnavailable();
-  }, [email]);
+    if (authStatus === "authenticated" && currentUserId) loadMyUnavailable(currentUserId);
+  }, [authStatus, currentUserId]);
 
   async function submit() {
     setMsg("");
 
-    const { data: userData } = await supabase.auth.getUser();
-    const uid = userData.user?.id;
-
-    if (!uid) {
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setMsg("❌ Could not verify your session. Please retry.");
+      return;
+    }
+    if (userResult.status === "unauthenticated") {
       setMsg("❌ Not logged in.");
       return;
     }
+    const uid = userResult.user.id;
 
     if (!startAt || !endAt) {
       setMsg("❌ Please select start and end.");
@@ -131,7 +209,7 @@ export default function StaffUnavailablePage() {
 
     setMsg("✅ Submitted!");
     setReason("");
-    await loadMyUnavailable();
+    await loadMyUnavailable(uid);
   }
 
   async function remove(id: number) {
@@ -142,10 +220,29 @@ export default function StaffUnavailablePage() {
       return;
     }
     setMsg("✅ Deleted!");
-    await loadMyUnavailable();
+    if (currentUserId) await loadMyUnavailable(currentUserId);
   }
 
-  if (!email) {
+  if (authStatus === "loading") {
+    return (
+      <div style={{ padding: 20 }}>
+        <h1>Staff — Unavailable</h1>
+        <p>Checking your session…</p>
+      </div>
+    );
+  }
+
+  if (authStatus === "read_error") {
+    return (
+      <div style={{ padding: 20 }}>
+        <h1>Staff — Unavailable</h1>
+        <p>{authError}</p>
+        <button onClick={() => setAuthRetryKey((value) => value + 1)}>Retry</button>
+      </div>
+    );
+  }
+
+  if (authStatus === "unauthenticated" || !email) {
     return (
       <div style={{ padding: 20 }}>
         <h1>Staff — Unavailable</h1>

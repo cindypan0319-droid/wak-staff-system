@@ -1,14 +1,25 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
 
 function formatDate(date: Date) {
   return date.toISOString().split("T")[0];
 }
 
 async function downloadExcel(type: string, start: string, end: string) {
-  const { data } = await supabase.auth.getSession();
-  const token = data?.session?.access_token;
+  let token: string | undefined;
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      alert("Could not verify your session. Please try again.");
+      return;
+    }
+    token = data.session?.access_token;
+  } catch {
+    alert("Could not verify your session. Please try again.");
+    return;
+  }
   if (!token) {
     alert("Not logged in");
     return;
@@ -147,6 +158,8 @@ export default function OwnerInvoicesPage() {
 
   const [loading, setLoading] = useState(true);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const [authError, setAuthError] = useState("");
+  const [authRetryKey, setAuthRetryKey] = useState(0);
 
   const qStart = typeof router.query.start === "string" ? router.query.start : null;
   const qEnd = typeof router.query.end === "string" ? router.query.end : null;
@@ -186,19 +199,25 @@ export default function OwnerInvoicesPage() {
 
   useEffect(() => {
     async function checkOwner() {
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData?.user) {
+      setAuthError("");
+      const userResult = await readCurrentUser();
+      if (userResult.status === "read_error") {
+        setAuthError("Could not verify your session. Please retry.");
+        return;
+      }
+      if (userResult.status === "unauthenticated") {
         router.push("/admin-login");
         return;
       }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", userData.user.id)
-        .single();
+      const profileResult = await readCurrentProfile(userResult.user.id);
+      if (profileResult.status === "read_error") {
+        setAuthError("Could not verify your role. Please retry.");
+        return;
+      }
+      const role = profileResult.status === "loaded" ? profileResult.profile.role : null;
 
-      if (String(profile?.role).toUpperCase() !== "OWNER") {
+      if (String(role).toUpperCase() !== "OWNER") {
         alert("Access denied");
         router.push("/");
         return;
@@ -206,9 +225,9 @@ export default function OwnerInvoicesPage() {
 
       setCheckingAuth(false);
     }
-    checkOwner();
+    void checkOwner();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authRetryKey]);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -234,7 +253,8 @@ export default function OwnerInvoicesPage() {
             }}
           >
             <h1 style={{ margin: 0, color: TEXT }}>Invoices</h1>
-            <div style={{ marginTop: 10, color: MUTED }}>Checking...</div>
+            <div style={{ marginTop: 10, color: MUTED }}>{authError || "Checking..."}</div>
+            {authError && <button type="button" onClick={() => setAuthRetryKey((key) => key + 1)}>Retry</button>}
           </div>
         </div>
       </div>
