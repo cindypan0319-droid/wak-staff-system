@@ -217,7 +217,12 @@ export default function AutoLogout() {
       const serverToken = profile?.single_login_token;
       const localToken = localStorage.getItem(SINGLE_LOGIN_STORAGE_KEY);
 
-      if (!role || isActive === false) {
+      if (isActive === false) {
+        await doLogout("global");
+        return;
+      }
+
+      if (!role) {
         enabledRef.current = false;
         roleRef.current = "ANON";
         clearLogoutTimer();
