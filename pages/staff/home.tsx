@@ -172,6 +172,7 @@ export default function StaffHomePage() {
   const [email, setEmail] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [msg, setMsg] = useState("");
+  const [authError, setAuthError] = useState("");
   const [isStoreDevice, setIsStoreDevice] = useState(false);
 
   const isOwner = useMemo(() => role === "OWNER", [role]);
@@ -186,9 +187,14 @@ export default function StaffHomePage() {
   async function loadMe() {
     setLoading(true);
     setMsg("");
+    setAuthError("");
 
     try {
-      const { data: s } = await supabase.auth.getSession();
+      const { data: s, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        setAuthError("Could not verify your session. Please retry.");
+        return;
+      }
       const session = s.session;
 
       if (!session?.user?.id) {
@@ -205,9 +211,7 @@ export default function StaffHomePage() {
         .maybeSingle();
 
       if (error) {
-        setRole("ANON");
-        setProfile(null);
-        setMsg("Cannot load profile: " + error.message);
+        setAuthError("Could not verify your profile. Please retry.");
         return;
       }
 
@@ -221,6 +225,8 @@ export default function StaffHomePage() {
       }
 
       setRole((p?.role as Role) ?? "ANON");
+    } catch {
+      setAuthError("Could not verify your session or profile. Please retry.");
     } finally {
       setLoading(false);
     }
@@ -279,6 +285,10 @@ export default function StaffHomePage() {
       </div>
     );
   }
+
+  if (authError) return <div style={{ padding: 20 }}>
+    {authError} <button type="button" onClick={() => { void loadMe(); }}>Retry</button>
+  </div>;
 
   if (!canUseStaffPages) {
     return (

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { readCurrentUser } from "../../lib/authGuard";
 
 type ShiftStatus = "SCHEDULED" | "WORKED" | "ABSENT" | "SICK" | "COVERED" | "CANCELLED";
 
@@ -227,6 +228,7 @@ export default function MyRosterNextWeek() {
   const [rows, setRows] = useState<ShiftRow[]>([]);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [msg, setMsg] = useState("");
+  const [authError, setAuthError] = useState("");
   const [isPublished, setIsPublished] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -237,13 +239,17 @@ export default function MyRosterNextWeek() {
   }
 
   async function ensureLogin() {
-    const { data } = await supabase.auth.getUser();
-    const id = data.user?.id ?? null;
-    if (!id) {
+    setAuthError("");
+    const userResult = await readCurrentUser();
+    if (userResult.status === "read_error") {
+      setAuthError("Could not verify your session. Please retry.");
+      return;
+    }
+    if (userResult.status === "unauthenticated") {
       window.location.href = "/";
       return;
     }
-    setUid(id);
+    setUid(userResult.user.id);
   }
 
   async function loadProfiles() {
@@ -412,6 +418,10 @@ export default function MyRosterNextWeek() {
   }
 
   const todayISO = toISODate(new Date());
+
+  if (authError) return <div style={{ padding: 20 }}>
+    {authError} <button type="button" onClick={() => { void ensureLogin(); }}>Retry</button>
+  </div>;
 
   return (
     <div style={{ background: WAK_BG, minHeight: "100vh", padding: 20 }}>
