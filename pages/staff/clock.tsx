@@ -45,7 +45,6 @@ export default function StaffClockPage() {
 
   const [storeAccessLoading, setStoreAccessLoading] = useState(true);
   const [isStoreDevice, setIsStoreDevice] = useState(false);
-  const [detectedIp, setDetectedIp] = useState("");
 
   const canUseClock = useMemo(() => {
     return role === "STAFF" || role === "MANAGER" || role === "OWNER";
@@ -197,7 +196,6 @@ export default function StaffClockPage() {
         const token = sessionData.session?.access_token;
         if (!token) {
           setIsStoreDevice(false);
-          setDetectedIp("");
           return;
         }
         const res = await fetch("/api/check-store-access", {
@@ -205,11 +203,9 @@ export default function StaffClockPage() {
         });
         const accessData = await res.json();
         setIsStoreDevice(!!accessData.allowed);
-        setDetectedIp(accessData.ip || "");
       } catch (error) {
         console.log("check store access error:", error);
         setIsStoreDevice(false);
-        setDetectedIp("");
       } finally {
         setStoreAccessLoading(false);
       }
@@ -218,8 +214,8 @@ export default function StaffClockPage() {
     checkStoreAccess();
   }, []);
 
-  async function refresh() {
-    setMsg("");
+  async function refresh(options?: { clearMessage?: boolean }) {
+    if (options?.clearMessage !== false) setMsg("");
     setLoading(true);
     try {
       if (!userId) {
@@ -255,6 +251,12 @@ export default function StaffClockPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canUseClock, userId]);
 
+  async function getAccessToken() {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    return data.session?.access_token ?? null;
+  }
+
   async function clockIn() {
     setMsg("");
     setLoading(true);
@@ -274,25 +276,36 @@ export default function StaffClockPage() {
         return;
       }
 
-      const payload = {
-        staff_id: userId,
-        shift_id: null as any,
-        clock_in_at: new Date().toISOString(),
-        clock_out_at: null,
-        device_tag: detectedIp ? `store-ip:${detectedIp}` : "web",
-      };
+      const token = await getAccessToken();
+      if (!token) {
+        setMsg("Your session could not be verified. Please sign in again.");
+        return;
+      }
 
-      const { error } = await supabase
-        .from("time_clock")
-        .insert([payload], { returning: "minimal" } as any);
+      const response = await fetch("/api/time-clock/clock-in", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const result = await response.json();
 
-      if (error) {
-        setMsg("Clock in failed: " + error.message);
+      if (!response.ok || !result.ok) {
+        if (result.reason === "ALREADY_CLOCKED_IN") {
+          setMsg("You are already clocked in. Current status has been refreshed.");
+          await refresh({ clearMessage: false });
+          return;
+        }
+        if (result.reason === "STORE_NETWORK_REQUIRED") {
+          setMsg("Clock in is only available on the store device / store network.");
+          return;
+        }
+        setMsg("Clock in failed. Please try again.");
         return;
       }
 
       setMsg("Clocked in.");
-      await refresh();
+      await refresh({ clearMessage: false });
+    } catch {
+      setMsg("Clock in failed. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -312,18 +325,40 @@ export default function StaffClockPage() {
         return;
       }
 
-      const { error } = await supabase
-        .from("time_clock")
-        .update({ clock_out_at: new Date().toISOString() })
-        .eq("id", openShift.id);
+      const token = await getAccessToken();
+      if (!token) {
+        setMsg("Your session could not be verified. Please sign in again.");
+        return;
+      }
 
-      if (error) {
-        setMsg("Clock out failed: " + error.message);
+      const response = await fetch("/api/time-clock/clock-out", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ expected_clock_id: openShift.id }),
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        if (result.reason === "OPEN_CLOCK_NOT_FOUND" || result.reason === "CLOCK_STATE_CHANGED") {
+          setMsg("Your clock status changed. Latest status has been refreshed.");
+          await refresh({ clearMessage: false });
+          return;
+        }
+        if (result.reason === "STORE_NETWORK_REQUIRED") {
+          setMsg("Clock out is only available on the store device / store network.");
+          return;
+        }
+        setMsg("Clock out failed. Please try again.");
         return;
       }
 
       setMsg("Clocked out.");
-      await refresh();
+      await refresh({ clearMessage: false });
+    } catch {
+      setMsg("Clock out failed. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }
