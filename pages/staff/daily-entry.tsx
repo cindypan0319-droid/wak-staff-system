@@ -1425,9 +1425,9 @@ export default function DailyEntryPage() {
     const readOnly = section === "morning" ? morningReadOnly : closingReadOnly;
     return (
       <div
+        className="denomination-grid"
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(158px, 1fr))",
           gap: "10px 12px",
         }}
       >
@@ -1672,7 +1672,7 @@ export default function DailyEntryPage() {
               className="closing-grid"
               style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)",
+                gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)",
                 gap: "0 clamp(16px, 3vw, 28px)",
                 alignItems: "start",
               }}
@@ -1725,7 +1725,7 @@ export default function DailyEntryPage() {
                 {sectionCard(
                   "Sales",
                   <>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12, marginBottom: 10 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
                       <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                         CASH Sales
                         <input
@@ -1780,7 +1780,7 @@ export default function DailyEntryPage() {
                     <div style={{ color: MUTED, fontSize: 13 }}>No platforms configured.</div>
                   ) : (
                     <>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         {platforms.map((p) => (
                           <label key={p.id} style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                             {platformDisplayName(p.name)} {!p.is_active && <span style={{ color: MUTED, fontWeight: 500 }}>(inactive)</span>}
@@ -1810,7 +1810,7 @@ export default function DailyEntryPage() {
                       Difference: {money(cashVariance)}. Recount the till before choosing a reason.
                     </div>
                     {(nightRecountAcknowledged || hasNightRecord) && (
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                           Reason
                           <select
@@ -1853,6 +1853,7 @@ export default function DailyEntryPage() {
             </div>
 
             <div
+              className="summary-action-bar"
               style={{
                 display: "flex",
                 justifyContent: "space-between",
@@ -1871,13 +1872,17 @@ export default function DailyEntryPage() {
                 {moneyBadge("Online", money(onlineSubtotal))}
                 {moneyBadge("Grand total", money(total), WAK_BLUE)}
               </div>
-              {(!hasNightRecord || canCorrectClose) && actionButton(
-                hasNightRecord ? "Save Correction" : "Submit Daily Close",
-                () => saveClosingAndSales(),
-                {
-                  primary: true,
-                  disabled: loading || closingReadOnly || (hasNightRecord && !nightRevision) || morningReadStatus !== "loaded" || storeAccessLoading || closingSavingRef.current,
-                }
+              {(!hasNightRecord || canCorrectClose) && (
+                <div className="summary-primary-action">
+                  {actionButton(
+                    hasNightRecord ? "Save Correction" : "Submit Daily Close",
+                    () => saveClosingAndSales(),
+                    {
+                      primary: true,
+                      disabled: loading || closingReadOnly || (hasNightRecord && !nightRevision) || morningReadStatus !== "loaded" || storeAccessLoading || closingSavingRef.current,
+                    }
+                  )}
+                </div>
               )}
             </div>
             </div>
@@ -1892,14 +1897,35 @@ export default function DailyEntryPage() {
             border-color: ${WAK_BLUE} !important;
             box-shadow: 0 0 0 3px rgba(30, 90, 158, 0.13);
           }
+          .denomination-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+          }
           @media (max-width: 800px) {
             .closing-grid {
               grid-template-columns: minmax(0, 1fr) !important;
             }
           }
+          @media (max-width: 680px) {
+            .denomination-grid {
+              grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+          }
           @media (max-width: 620px) {
             .cashup-header-actions {
               width: 100%;
+            }
+            .summary-action-bar {
+              align-items: stretch !important;
+              flex-direction: column;
+            }
+            .summary-primary-action,
+            .summary-primary-action :global(button) {
+              width: 100%;
+            }
+          }
+          @media (max-width: 460px) {
+            .denomination-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
             }
           }
         `}</style>
