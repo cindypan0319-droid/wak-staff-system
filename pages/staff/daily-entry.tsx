@@ -388,6 +388,10 @@ export default function DailyEntryPage() {
   const [date, setDate] = useState(melbourneDateInputValue());
   const draftKey = `daily-entry-draft-${date}`;
   const [activeTab, setActiveTab] = useState<"morning" | "closing">("morning");
+  const selectedDateRef = useRef(date);
+  const manualTabDateRef = useRef<string | null>(null);
+  const defaultTabPendingDateRef = useRef<string | null>(date);
+  selectedDateRef.current = date;
   const [callerRole, setCallerRole] = useState<DailyCashupRole | null>(null);
   const [callerUserId, setCallerUserId] = useState<string | null>(null);
   const [nightEnteredBy, setNightEnteredBy] = useState<string | null>(null);
@@ -624,7 +628,10 @@ export default function DailyEntryPage() {
     }
   }
 
-  async function loadExisting(options?: { restoreDraft?: boolean }): Promise<LoadExistingResult> {
+  async function loadExisting(options?: {
+    restoreDraft?: boolean;
+    selectDefaultTab?: boolean;
+  }): Promise<LoadExistingResult> {
     const restoreDraft = options?.restoreDraft ?? true;
 
     setLoading(true);
@@ -709,6 +716,16 @@ export default function DailyEntryPage() {
 
       const serverCashDiffReason = ((reasonRaw as CashDiffReason) || "") as CashDiffReason;
       const serverCashDiffNote = String(noteRaw ?? "");
+
+      if (
+        options?.selectDefaultTab === true &&
+        selectedDateRef.current === date &&
+        defaultTabPendingDateRef.current === date &&
+        manualTabDateRef.current !== date
+      ) {
+        setActiveTab(serverHasNightRecord || serverHasMorningRecord ? "closing" : "morning");
+        defaultTabPendingDateRef.current = null;
+      }
 
       morningServerSnapshotRef.current = buildMorningSnapshot(serverMorningCounts);
       closingServerSnapshotRef.current = buildClosingSnapshot({
@@ -812,7 +829,7 @@ export default function DailyEntryPage() {
   }
 
   useEffect(() => {
-    loadExisting({ restoreDraft: true });
+    loadExisting({ restoreDraft: true, selectDefaultTab: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
@@ -1551,7 +1568,13 @@ export default function DailyEntryPage() {
                 className="cashup-input"
                 type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={(e) => {
+                  const nextDate = e.target.value;
+                  selectedDateRef.current = nextDate;
+                  manualTabDateRef.current = null;
+                  defaultTabPendingDateRef.current = nextDate;
+                  setDate(nextDate);
+                }}
                 disabled={loading}
                 style={{
                   padding: "9px 11px",
@@ -1564,7 +1587,7 @@ export default function DailyEntryPage() {
               />
             </div>
 
-            {actionButton("Refresh", () => loadExisting({ restoreDraft: false }), { disabled: loading })}
+            {actionButton("Refresh", () => loadExisting({ restoreDraft: false, selectDefaultTab: true }), { disabled: loading })}
             {actionButton("← Back to Home", handleBackHome, { disabled: loading })}
             {loading && <span style={{ color: MUTED, fontWeight: 600 }}>Loading...</span>}
           </div>
@@ -1604,7 +1627,11 @@ export default function DailyEntryPage() {
             <button
               key={tab}
               type="button"
-              onClick={() => setActiveTab(tab)}
+              onClick={() => {
+                manualTabDateRef.current = date;
+                defaultTabPendingDateRef.current = null;
+                setActiveTab(tab);
+              }}
               style={{
                 border: activeTab === tab ? "1px solid #D7E2F0" : "1px solid transparent",
                 borderRadius: 8,
