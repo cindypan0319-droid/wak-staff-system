@@ -248,9 +248,18 @@ export default function StaffHomePage() {
   useEffect(() => {
     async function checkStoreAccess() {
       try {
-        const res = await fetch("/api/check-store-access");
-        const data = await res.json();
-        setIsStoreDevice(!!data.allowed);
+        const { data: sessionData, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        const token = sessionData.session?.access_token;
+        if (!token) {
+          setIsStoreDevice(false);
+          return;
+        }
+        const res = await fetch("/api/check-store-access", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const accessData = await res.json();
+        setIsStoreDevice(!!accessData.allowed);
       } catch (error) {
         console.log("check store access error:", error);
         setIsStoreDevice(false);
