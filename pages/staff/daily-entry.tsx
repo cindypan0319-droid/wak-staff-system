@@ -1672,7 +1672,7 @@ export default function DailyEntryPage() {
               className="closing-grid"
               style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)",
+                gridTemplateColumns: "minmax(0, 7fr) minmax(0, 3fr)",
                 gap: "0 clamp(16px, 3vw, 28px)",
                 alignItems: "start",
               }}
@@ -1725,7 +1725,7 @@ export default function DailyEntryPage() {
                 {sectionCard(
                   "Sales",
                   <>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12, marginBottom: 10 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 10 }}>
                       <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                         CASH Sales
                         <input
@@ -1780,7 +1780,7 @@ export default function DailyEntryPage() {
                     <div style={{ color: MUTED, fontSize: 13 }}>No platforms configured.</div>
                   ) : (
                     <>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         {platforms.map((p) => (
                           <label key={p.id} style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                             {platformDisplayName(p.name)} {!p.is_active && <span style={{ color: MUTED, fontWeight: 500 }}>(inactive)</span>}
@@ -1810,7 +1810,7 @@ export default function DailyEntryPage() {
                       Difference: {money(cashVariance)}. Recount the till before choosing a reason.
                     </div>
                     {(nightRecountAcknowledged || hasNightRecord) && (
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                           Reason
                           <select
