@@ -8,7 +8,6 @@ const EPS = 0.01;
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
 const WAK_BG = "#F5F6F8";
-const CARD_BG = "#FFFFFF";
 const BORDER = "#E5E7EB";
 const TEXT = "#111827";
 const MUTED = "#6B7280";
@@ -23,6 +22,47 @@ type Platform = {
 type DailyCloseResult = {
   night_updated_at: string;
   close_contract_version: number;
+};
+
+type DailyCashupRole = "STAFF" | "MANAGER" | "OWNER";
+
+type DailyCashupSnapshot = {
+  business_date: string;
+  store_id: string;
+  caller: { role: DailyCashupRole; user_id: string };
+  morning: {
+    exists: boolean;
+    counts: unknown;
+    total_cash: number | string | null;
+    entered_by: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+  night: {
+    exists: boolean;
+    counts: unknown;
+    total_cash: number | string | null;
+    removed_cash: number | string | null;
+    entered_by: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+  daily_sales: {
+    exists: boolean;
+    cash_sales: number | string | null;
+    eftpos_sales: number | string | null;
+    expected_cash: number | string | null;
+    total_sales: number | string | null;
+    notes: string | null;
+    entered_by: string | null;
+  };
+  platforms: Array<{
+    platform: string;
+    gross_income: number | string;
+    fees: number | string;
+    entered_by: string | null;
+  }>;
+  active_platforms: Platform[];
 };
 
 type LoadExistingResult = {
@@ -72,10 +112,15 @@ type CashDiffReason =
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
-function todayDateInputValue() {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+function melbourneDateInputValue() {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 }
 
 function round2(n: number) {
@@ -165,18 +210,18 @@ function calcTotal(c: CashCounts) {
   );
 }
 
-const denomFields: { label: string; key: keyof CashCounts }[] = [
-  { label: "$100 notes", key: "note100" },
-  { label: "$50 notes", key: "note50" },
-  { label: "$20 notes", key: "note20" },
-  { label: "$10 notes", key: "note10" },
-  { label: "$5 notes", key: "note5" },
-  { label: "$2 coins", key: "coin2" },
-  { label: "$1 coins", key: "coin1" },
-  { label: "50c coins", key: "coin50c" },
-  { label: "20c coins", key: "coin20c" },
-  { label: "10c coins", key: "coin10c" },
-  { label: "5c coins", key: "coin5c" },
+const denomFields: { label: string; key: keyof CashCounts; value: number }[] = [
+  { label: "$100 notes", key: "note100", value: 100 },
+  { label: "$50 notes", key: "note50", value: 50 },
+  { label: "$20 notes", key: "note20", value: 20 },
+  { label: "$10 notes", key: "note10", value: 10 },
+  { label: "$5 notes", key: "note5", value: 5 },
+  { label: "$2 coins", key: "coin2", value: 2 },
+  { label: "$1 coins", key: "coin1", value: 1 },
+  { label: "50c coins", key: "coin50c", value: 0.5 },
+  { label: "20c coins", key: "coin20c", value: 0.2 },
+  { label: "10c coins", key: "coin10c", value: 0.1 },
+  { label: "5c coins", key: "coin5c", value: 0.05 },
 ];
 
 function normalizeCountsForCompare(c: CashCounts) {
@@ -256,6 +301,12 @@ function friendlyRpcError(message: string) {
   if (message.includes("DAILY_CLOSE_REVISION_CONFLICT")) {
     return "This Daily Close changed while you were working. Reload before trying again.";
   }
+  if (message.includes("STAFF_DAILY_CLOSE_CURRENT_DATE_ONLY")) {
+    return "Staff can only correct their own Daily Close for today's Melbourne business date.";
+  }
+  if (message.includes("STAFF_DAILY_CLOSE_NOT_ORIGINAL_SUBMITTER")) {
+    return "Only the staff member who originally submitted this Daily Close can correct it.";
+  }
   if (message.includes("Employee profile is inactive")) {
     return "Your employee profile is inactive. Daily Entry cannot be saved.";
   }
@@ -298,7 +349,7 @@ function friendlyRpcError(message: string) {
   if (message.includes("STAFF may only update a MORNING")) {
     return "Only the employee who entered this Morning Cashup, or a manager, may change it.";
   }
-  return message;
+  return "The Daily Cashup could not be saved. Please refresh and try again.";
 }
 
 export default function DailyEntryPage() {
@@ -309,8 +360,12 @@ export default function DailyEntryPage() {
   const [isStoreDevice, setIsStoreDevice] = useState(false);
   const [detectedIp, setDetectedIp] = useState("");
 
-  const [date, setDate] = useState(todayDateInputValue());
+  const [date, setDate] = useState(melbourneDateInputValue());
   const draftKey = `daily-entry-draft-${date}`;
+  const [activeTab, setActiveTab] = useState<"morning" | "closing">("morning");
+  const [callerRole, setCallerRole] = useState<DailyCashupRole | null>(null);
+  const [callerUserId, setCallerUserId] = useState<string | null>(null);
+  const [nightEnteredBy, setNightEnteredBy] = useState<string | null>(null);
 
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [platformGrossText, setPlatformGrossText] = useState<Record<string, string>>({});
@@ -419,6 +474,12 @@ export default function DailyEntryPage() {
   }, [platformGrossText, platforms]);
 
   const total = useMemo(() => round2(instoreSubtotal + onlineSubtotal), [instoreSubtotal, onlineSubtotal]);
+  const isCurrentMelbourneDate = date === melbourneDateInputValue();
+  const canCorrectClose = hasNightRecord && (
+    callerRole === "OWNER" ||
+    callerRole === "MANAGER" ||
+    (callerRole === "STAFF" && isCurrentMelbourneDate && nightEnteredBy === callerUserId)
+  );
 
   const currentMorningSnapshot = useMemo(() => {
     return buildMorningSnapshot(morningCounts);
@@ -538,30 +599,8 @@ export default function DailyEntryPage() {
     }
   }
 
-  async function loadPlatforms() {
-    const res = await supabase
-      .from("platforms")
-      .select("id, name, is_active, sort_order")
-      .eq("is_active", true)
-      .order("sort_order", { ascending: true })
-      .order("name", { ascending: true });
-
-    if (res.error) {
-      setPlatforms([]);
-      return {
-        list: [] as Platform[],
-        errorMessage: "Cannot load platforms: " + res.error.message,
-      };
-    }
-
-    const list = (res.data ?? []) as Platform[];
-    setPlatforms(list);
-    return { list, errorMessage: null };
-  }
-
   async function loadExisting(options?: { restoreDraft?: boolean }): Promise<LoadExistingResult> {
     const restoreDraft = options?.restoreDraft ?? true;
-    const loadErrors: string[] = [];
 
     setLoading(true);
     setMsg("");
@@ -570,116 +609,71 @@ export default function DailyEntryPage() {
     initialLoadDoneRef.current = false;
 
     try {
-      const platformLoad = await loadPlatforms();
-      let loadedPlatforms = platformLoad.list;
-      if (platformLoad.errorMessage) {
-        loadErrors.push(platformLoad.errorMessage);
+      const snapshotResult = await supabase.rpc("get_daily_cashup_snapshot", {
+        p_business_date: date,
+        p_store_id: DEFAULT_STORE_ID,
+      });
+
+      if (snapshotResult.error || !snapshotResult.data) {
+        console.log("DAILY_CASHUP_SNAPSHOT_READ_ERROR");
+        setMorningRead({ date, status: "error" });
+        setNightRead({ date, status: "error" });
+        setMsg("❌ Daily Cashup data could not be loaded. Please use Refresh and try again.");
+        return { nightExists: false, fullyLoaded: false };
       }
 
-      const ds = await supabase
-        .from("daily_sales")
-        .select("business_date, cash_sales, eftpos_sales, notes")
-        .eq("business_date", date)
-        .eq("store_id", DEFAULT_STORE_ID)
-        .maybeSingle();
+      const snapshot = snapshotResult.data as DailyCashupSnapshot;
+      let loadedPlatforms = (snapshot.active_platforms ?? []).map((platform) => ({
+        ...platform,
+        is_active: platform.is_active === true,
+      }));
+      const activeCanonicalNames = new Set(
+        loadedPlatforms.map((platform) => canonicalPlatformName(platform.name))
+      );
+      const serverPlatformGrossText: Record<string, string> = {};
+      const serverExistingPlatformGross: Record<string, number> = {};
+      const historicalPlatforms: Platform[] = [];
 
-      const dailySalesLoaded = !ds.error || ds.error.code === "PGRST116";
-      if (!dailySalesLoaded) {
-        loadErrors.push("Cannot load instore sales: " + ds.error.message);
-      }
-
-      const row = ds.data;
-      const cashVal = row?.cash_sales;
-      const eftVal = row?.eftpos_sales;
-
-      const serverCashSalesText = cashVal == null ? "" : String(cashVal);
-      const serverEftposSalesText = eftVal == null ? "" : String(eftVal);
-      const serverNotes = row?.notes ?? "";
-
-      const pi = await supabase
-        .from("platform_income")
-        .select("business_date, platform, gross_income")
-        .eq("business_date", date)
-        .eq("store_id", DEFAULT_STORE_ID);
-
-      let serverPlatformGrossText: Record<string, string> = {};
-      let serverExistingPlatformGross: Record<string, number> = {};
-      const platformIncomeLoaded = !pi.error;
-      if (!platformIncomeLoaded) {
-        loadErrors.push("Cannot load online sales: " + pi.error.message);
-      } else {
-        const map: Record<string, string> = {};
-        const existingMap: Record<string, number> = {};
-        const activeCanonicalNames = new Set(
-          loadedPlatforms.map((platform) => canonicalPlatformName(platform.name))
-        );
-        const historicalPlatforms: Platform[] = [];
-
-        for (const r of pi.data ?? []) {
-          const rawPlatform = String(r.platform);
-          const p = canonicalPlatformName(rawPlatform);
-          const g = r.gross_income;
-          const gross = Number(g);
-          map[p] = Number.isFinite(gross) ? String(gross) : "0";
-          existingMap[p] = Number.isFinite(gross) ? round2(gross) : 0;
-
-          if (!activeCanonicalNames.has(p)) {
-            activeCanonicalNames.add(p);
-            historicalPlatforms.push({
-              id: `historical-${p}`,
-              name: p,
-              is_active: false,
-              sort_order: Number.MAX_SAFE_INTEGER,
-            });
-          }
+      for (const row of snapshot.platforms ?? []) {
+        const canonicalName = canonicalPlatformName(String(row.platform));
+        const gross = Number(row.gross_income);
+        serverPlatformGrossText[canonicalName] = Number.isFinite(gross) ? String(row.gross_income) : "0";
+        serverExistingPlatformGross[canonicalName] = Number.isFinite(gross) ? round2(gross) : 0;
+        if (!activeCanonicalNames.has(canonicalName)) {
+          activeCanonicalNames.add(canonicalName);
+          historicalPlatforms.push({
+            id: `historical-${canonicalName}`,
+            name: canonicalName,
+            is_active: false,
+            sort_order: Number.MAX_SAFE_INTEGER,
+          });
         }
-        loadedPlatforms = [...loadedPlatforms, ...historicalPlatforms];
-        setPlatforms(loadedPlatforms);
-        serverPlatformGrossText = map;
-        serverExistingPlatformGross = existingMap;
+      }
+      loadedPlatforms = [...loadedPlatforms, ...historicalPlatforms];
+      for (const platform of loadedPlatforms) {
+        const canonicalName = canonicalPlatformName(platform.name);
+        if (!(canonicalName in serverPlatformGrossText)) {
+          serverPlatformGrossText[canonicalName] = "";
+        }
       }
 
-      const m = await supabase
-        .from("cashup_sessions")
-        .select("counts")
-        .eq("business_date", date)
-        .eq("store_id", DEFAULT_STORE_ID)
-        .eq("session_type", "MORNING")
-        .maybeSingle();
-
-      const morningLoaded = !m.error;
-      setMorningRead({ date, status: morningLoaded ? "loaded" : "error" });
-      if (!morningLoaded) {
-        loadErrors.push("Cannot load morning cashup: " + m.error.message);
-      }
-
-      const serverHasMorningRecord = !!m.data;
-      const serverMorningCounts = m.data
-        ? storedJsonToCounts(m.data.counts ?? {})
+      const serverCashSalesText = snapshot.daily_sales.cash_sales == null
+        ? ""
+        : String(snapshot.daily_sales.cash_sales);
+      const serverEftposSalesText = snapshot.daily_sales.eftpos_sales == null
+        ? ""
+        : String(snapshot.daily_sales.eftpos_sales);
+      const serverNotes = snapshot.daily_sales.notes ?? "";
+      const serverHasMorningRecord = snapshot.morning.exists === true;
+      const serverMorningCounts = serverHasMorningRecord
+        ? storedJsonToCounts(snapshot.morning.counts)
+        : { ...emptyCounts };
+      const serverHasNightRecord = snapshot.night.exists === true;
+      const serverNightCounts = serverHasNightRecord
+        ? storedJsonToCounts(snapshot.night.counts)
         : { ...emptyCounts };
 
-      const n = await supabase
-        .from("cashup_sessions")
-        .select("counts, updated_at")
-        .eq("business_date", date)
-        .eq("store_id", DEFAULT_STORE_ID)
-        .eq("session_type", "NIGHT")
-        .maybeSingle();
-
-      const nightLoaded = !n.error;
-      setNightRead({ date, status: nightLoaded ? "loaded" : "error" });
-      if (!nightLoaded) {
-        loadErrors.push(
-          "We couldn't verify whether this day has already been closed. Please try again before making changes. "
-          + n.error.message
-        );
-      }
-
-      const serverNightCounts = n.data
-        ? storedJsonToCounts(n.data.counts ?? {})
-        : { ...emptyCounts };
-
-      const nightCountsRaw = asRecord(n.data?.counts);
+      const nightCountsRaw = asRecord(snapshot.night.counts);
       const removedRaw = nightCountsRaw._removed_counts ?? null;
       const reasonRaw = nightCountsRaw._cash_diff_reason ?? "";
       const noteRaw = nightCountsRaw._cash_diff_note ?? "";
@@ -707,13 +701,17 @@ export default function DailyEntryPage() {
       setHasMorningRecord(serverHasMorningRecord);
       setSavedMorningTotal(
         serverHasMorningRecord
-          ? calcTotal(serverMorningCounts)
+          ? Number(snapshot.morning.total_cash ?? calcTotal(serverMorningCounts))
           : DEFAULT_FLOAT_IF_NO_MORNING
       );
-      if (nightLoaded) {
-        setHasNightRecord(!!n.data);
-        setNightRevision(n.data?.updated_at ?? null);
-      }
+      setHasNightRecord(serverHasNightRecord);
+      setNightRevision(snapshot.night.updated_at ?? null);
+      setNightEnteredBy(snapshot.night.entered_by ?? null);
+      setCallerRole(snapshot.caller.role);
+      setCallerUserId(snapshot.caller.user_id);
+      setMorningRead({ date, status: "loaded" });
+      setNightRead({ date, status: "loaded" });
+      setPlatforms(loadedPlatforms);
       setMorningCounts(serverMorningCounts);
       setNightCounts(serverNightCounts);
       setRemovedCounts(serverRemovedCounts);
@@ -736,24 +734,11 @@ export default function DailyEntryPage() {
       setMorningDirty(false);
       setClosingDirty(false);
 
-      const fullyLoaded =
-        platformLoad.errorMessage === null &&
-        dailySalesLoaded &&
-        platformIncomeLoaded &&
-        morningLoaded &&
-        nightLoaded;
+      setMsg(serverHasNightRecord ? "" : "✅ Daily Cashup loaded.");
 
-      if (loadErrors.length > 0) {
-        setMsg("❌ " + loadErrors.join(" "));
-      } else {
-        setMsg(
-          n.data
-            ? "ℹ️ This Daily Close has already been submitted and is read-only."
-            : "✅ Loaded saved data for this date."
-        );
-      }
-
-      if (restoreDraft && fullyLoaded && !n.data) {
+      if (serverHasNightRecord) {
+        localStorage.removeItem(draftKey);
+      } else if (restoreDraft) {
         const savedDraft = localStorage.getItem(draftKey);
 
         if (savedDraft) {
@@ -786,17 +771,14 @@ export default function DailyEntryPage() {
       }
 
       return {
-        nightExists: nightLoaded && !!n.data,
-        fullyLoaded,
+        nightExists: serverHasNightRecord,
+        fullyLoaded: true,
       };
-    } catch (error) {
-      setMorningRead((current) => current.date === date && current.status === "loaded"
-        ? current : { date, status: "error" });
+    } catch {
+      console.log("DAILY_CASHUP_SNAPSHOT_READ_ERROR");
+      setMorningRead({ date, status: "error" });
       setNightRead({ date, status: "error" });
-      setMsg(
-        "❌ We couldn't verify whether this day has already been closed. Please try again before making changes. "
-        + (error instanceof Error ? error.message : "Unexpected load failure")
-      );
+      setMsg("❌ Daily Cashup data could not be loaded. Please use Refresh and try again.");
       return { nightExists: false, fullyLoaded: false };
     } finally {
       setLoading(false);
@@ -874,11 +856,15 @@ export default function DailyEntryPage() {
         return false;
       }
 
-      morningServerSnapshotRef.current = buildMorningSnapshot(morningCounts);
-      setMorningDirty(false);
-      setHasMorningRecord(true);
-      setMorningRead({ date, status: "loaded" });
-      setSavedMorningTotal(morningTotal);
+      const reloadResult = await loadExisting({ restoreDraft: false });
+      if (!reloadResult.fullyLoaded) {
+        const text = "⚠️ Morning Cashup was saved, but the authoritative snapshot could not be reloaded. Please refresh before continuing.";
+        setMsg(text);
+        setMorningSaveState("error");
+        setMorningSaveError(text);
+        return true;
+      }
+
       setMorningSaveState("saved");
       setMorningLastSavedAt(new Date().toISOString());
       setMsg(`✅ Morning cashup saved at the actual counted amount of ${money(morningTotal)}.`);
@@ -936,8 +922,16 @@ export default function DailyEntryPage() {
         return false;
       }
 
-      if (hasNightRecord) {
-        const text = "❌ This Daily Close has already been submitted and cannot be changed here.";
+      if (hasNightRecord && !canCorrectClose) {
+        const text = "❌ You can view this submitted Daily Close, but you cannot correct it for this date or submitter.";
+        setMsg(text);
+        setClosingSaveState("error");
+        setClosingSaveError(text);
+        return false;
+      }
+
+      if (hasNightRecord && !nightRevision) {
+        const text = "❌ The saved Daily Close revision could not be verified. Refresh before saving a correction.";
         setMsg(text);
         setClosingSaveState("error");
         setClosingSaveError(text);
@@ -1069,16 +1063,28 @@ export default function DailyEntryPage() {
           note: needReason() ? cashDiffNote.trim() : "",
         },
         platforms: platformInstructions,
-        expected_night_updated_at: null,
+        expected_night_updated_at: hasNightRecord ? nightRevision : null,
         confirm_fee_recalculation: confirmFeeRecalculation,
         notes,
       };
 
-      const result = await supabase.rpc("submit_daily_close", {
+      const rpcName = hasNightRecord ? "correct_daily_close" : "submit_daily_close";
+      const result = await supabase.rpc(rpcName, {
         p_payload: payload,
       });
 
       if (result.error) {
+        if (result.error.message.includes("DAILY_CLOSE_REVISION_CONFLICT")) {
+          const conflictReload = await loadExisting({ restoreDraft: false });
+          setActiveTab("closing");
+          const conflictText = conflictReload.fullyLoaded
+            ? "⚠️ This cashup changed since you opened it. Latest values have been reloaded."
+            : "⚠️ This cashup changed since you opened it, but the latest values could not be reloaded. Please refresh before editing.";
+          setMsg(conflictText);
+          setClosingSaveState("error");
+          setClosingSaveError(conflictText);
+          return false;
+        }
         const text = "❌ Daily Close failed: " + friendlyRpcError(result.error.message);
         setMsg(text);
         setClosingSaveState("error");
@@ -1088,8 +1094,11 @@ export default function DailyEntryPage() {
 
       const committed = result.data as DailyCloseResult;
       localStorage.removeItem(draftKey);
-      setHasNightRecord(true);
-      setNightRevision(committed?.night_updated_at ?? null);
+      setActiveTab("closing");
+      if (!hasNightRecord) {
+        setHasNightRecord(true);
+        setNightRevision(committed?.night_updated_at ?? null);
+      }
 
       let reloadResult: LoadExistingResult = {
         nightExists: false,
@@ -1107,7 +1116,7 @@ export default function DailyEntryPage() {
         setClosingSaveState("saved");
         setClosingLastSavedAt(new Date().toISOString());
         setMsg(
-          "⚠️ Daily Close was submitted successfully, but some saved data could not be reloaded. Do not submit again. Please refresh the page."
+          `⚠️ Daily Close was ${hasNightRecord ? "corrected" : "submitted"} successfully, but the saved snapshot could not be reloaded. Please refresh before making another change.`
         );
         return true;
       }
@@ -1115,7 +1124,7 @@ export default function DailyEntryPage() {
       setClosingDirty(false);
       setClosingSaveState("saved");
       setClosingLastSavedAt(new Date().toISOString());
-      setMsg("✅ Daily Close submitted successfully. Authoritative server data has been reloaded.");
+      setMsg(`✅ Daily Close ${hasNightRecord ? "correction saved" : "submitted"}.`);
 
       return true;
     } catch (error) {
@@ -1260,12 +1269,8 @@ export default function DailyEntryPage() {
     return (
       <div
         style={{
-          border: `1px solid ${BORDER}`,
-          borderRadius: 16,
-          background: CARD_BG,
-          padding: 18,
-          marginBottom: 16,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          borderBottom: `1px solid ${BORDER}`,
+          padding: "18px 0 22px",
         }}
       >
         <div
@@ -1361,6 +1366,7 @@ export default function DailyEntryPage() {
     setCounts: React.Dispatch<React.SetStateAction<CashCounts>>,
     section: "morning" | "night" | "removed"
   ) {
+    const readOnly = section === "morning" ? morningReadOnly : closingReadOnly;
     return (
       <div
         style={{
@@ -1370,7 +1376,7 @@ export default function DailyEntryPage() {
           justifyContent: "start",
         }}
       >
-        {denomFields.map(({ label, key }) => (
+        {denomFields.map(({ label, key, value }) => (
           <div
             key={key}
             style={{
@@ -1396,7 +1402,7 @@ export default function DailyEntryPage() {
             <input
               value={counts[key] ?? ""}
               onChange={(e) => setCountsField(setCounts, key, e.target.value, section)}
-              disabled={pageReadOnly}
+              disabled={readOnly}
               style={{
                 width: 68,
                 padding: "8px 10px",
@@ -1407,13 +1413,25 @@ export default function DailyEntryPage() {
               }}
               inputMode="numeric"
             />
+            <div style={{ marginTop: 7, fontSize: 12, color: MUTED, fontWeight: 700 }}>
+              {money(round2((counts[key] ?? 0) * value))}
+            </div>
           </div>
         ))}
       </div>
     );
   }
 
-  const pageReadOnly = !isStoreDevice || hasNightRecord || nightReadStatus !== "loaded";
+  const snapshotLoaded = morningReadStatus === "loaded" && nightReadStatus === "loaded";
+  const morningReadOnly = !isStoreDevice || !snapshotLoaded || hasNightRecord;
+  const closingReadOnly = !isStoreDevice || !snapshotLoaded || (hasNightRecord && !canCorrectClose);
+  const closingStatus = nightReadStatus !== "loaded"
+    ? "Checking"
+    : hasNightRecord
+    ? canCorrectClose
+      ? "Submitted · Editing correction"
+      : "Submitted · View only"
+    : "Not submitted";
 
   return (
     <div
@@ -1435,10 +1453,10 @@ export default function DailyEntryPage() {
           }}
         >
           <div>
-            <h1 style={{ margin: 0, color: TEXT }}>Daily Closing Entry</h1>
-            <div style={{ marginTop: 6, color: MUTED }}>
-              Morning cashup, closing cashup, instore sales and online platforms
-            </div>
+            <h1 style={{ margin: 0, color: TEXT }}>Daily Cashup</h1>
+            <div style={{ marginTop: 6, color: MUTED }}>{date} · {activeTab === "morning"
+              ? hasMorningRecord ? "Morning saved" : "Morning not saved"
+              : closingStatus}</div>
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
@@ -1478,7 +1496,9 @@ export default function DailyEntryPage() {
           {storeAccessLoading
             ? "Checking store device access..."
             : isStoreDevice
-            ? "✅ Store device/network verified. Draft changes stay in this browser until you explicitly submit."
+            ? callerRole === "OWNER"
+              ? "✅ Owner access verified."
+              : "✅ Store network verified."
             : `⚠️ Not on approved store device/network${detectedIp ? ` (IP: ${detectedIp})` : ""}. Saving is disabled.`}
         </div>
 
@@ -1493,22 +1513,6 @@ export default function DailyEntryPage() {
           <div style={{ border: "1px solid #FECACA", background: "#FEF2F2", padding: "12px 14px",
             borderRadius: 12, marginBottom: 16, color: WAK_RED }}>
             We could not verify whether this day has already been closed. Please use Refresh and try again before making changes.
-          </div>
-        )}
-
-        {nightReadStatus === "loaded" && hasNightRecord && (
-          <div
-            style={{
-              border: "1px solid #BFDBFE",
-              background: "#EFF6FF",
-              padding: "12px 14px",
-              borderRadius: 12,
-              marginBottom: 16,
-              color: TEXT,
-            }}
-          >
-            <b>Daily Close submitted.</b> This page is read-only for the selected date.
-            {nightRevision ? ` Revision: ${nightRevision}` : ""}
           </div>
         )}
 
@@ -1527,7 +1531,29 @@ export default function DailyEntryPage() {
           </div>
         )}
 
-        {sectionCard(
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, borderBottom: `1px solid ${BORDER}` }}>
+          {(["morning", "closing"] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              style={{
+                border: 0,
+                borderBottom: activeTab === tab ? `3px solid ${WAK_BLUE}` : "3px solid transparent",
+                background: "transparent",
+                color: activeTab === tab ? WAK_BLUE : MUTED,
+                padding: "12px 18px",
+                fontSize: 16,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              {tab === "morning" ? "Morning" : "Closing"}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "morning" && sectionCard(
           "Morning Cashup (Open)",
           <>
             <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
@@ -1563,15 +1589,16 @@ export default function DailyEntryPage() {
             {renderDenomGrid(morningCounts, setMorningCounts, "morning")}
 
             <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-              {actionButton("Save Morning Cashup", () => saveMorning(), {
+              {actionButton("Save Morning", () => saveMorning(), {
                 primary: true,
-                disabled: loading || pageReadOnly || storeAccessLoading || morningSavingRef.current,
+                disabled: loading || morningReadOnly || storeAccessLoading || morningSavingRef.current,
               })}
             </div>
           </>,
           saveBadge(morningSaveState, morningDirty, morningSaveError, morningLastSavedAt)
         )}
 
+        {activeTab === "closing" && <>
         {sectionCard(
           "Closing Cashup (Close)",
           <>
@@ -1651,7 +1678,7 @@ export default function DailyEntryPage() {
         )}
 
         {sectionCard(
-          "Instore",
+          "Sales",
           <>
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 16, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
@@ -1659,7 +1686,7 @@ export default function DailyEntryPage() {
               </div>
               <input
                 value={cashSalesText}
-                disabled={pageReadOnly}
+                disabled={closingReadOnly}
                 onChange={(e) => {
                   setCashSalesText(e.target.value);
                   markClosingDirtyStyleOnly();
@@ -1683,7 +1710,7 @@ export default function DailyEntryPage() {
               </div>
               <input
                 value={eftposSalesText}
-                disabled={pageReadOnly}
+                disabled={closingReadOnly}
                 onChange={(e) => {
                   setEftposSalesText(e.target.value);
                   markClosingDirtyStyleOnly();
@@ -1716,7 +1743,7 @@ export default function DailyEntryPage() {
               </div>
               <textarea
                 value={notes}
-                disabled={pageReadOnly}
+                disabled={closingReadOnly}
                 onChange={(e) => {
                   setNotes(e.target.value);
                   markClosingDirtyStyleOnly();
@@ -1755,7 +1782,7 @@ export default function DailyEntryPage() {
                     <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>Reason</div>
                     <select
                       value={cashDiffReason}
-                      disabled={pageReadOnly}
+                      disabled={closingReadOnly}
                       onChange={(e) => {
                         setCashDiffReason(e.target.value as CashDiffReason);
                         markClosingDirtyStyleOnly();
@@ -1786,7 +1813,7 @@ export default function DailyEntryPage() {
                     </div>
                     <input
                       value={cashDiffNote}
-                      disabled={pageReadOnly}
+                      disabled={closingReadOnly}
                       onChange={(e) => {
                         setCashDiffNote(e.target.value);
                         markClosingDirtyStyleOnly();
@@ -1811,7 +1838,7 @@ export default function DailyEntryPage() {
         )}
 
         {sectionCard(
-          "Online Platform",
+          "Online Platforms",
           platforms.length === 0 ? (
             <div style={{ color: MUTED }}>
               No platforms configured (Owner can add platforms in Manager → Platforms).
@@ -1835,7 +1862,7 @@ export default function DailyEntryPage() {
                     </div>
                     <input
                       value={platformGrossText[canonicalPlatformName(p.name)] ?? ""}
-                      disabled={pageReadOnly}
+                      disabled={closingReadOnly}
                       onChange={(e) => {
                         const canonicalName = canonicalPlatformName(p.name);
                         setPlatformGrossText((prev) => ({ ...prev, [canonicalName]: e.target.value }));
@@ -1877,14 +1904,19 @@ export default function DailyEntryPage() {
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              {actionButton("Submit Daily Close", () => saveClosingAndSales(), {
-                primary: true,
-                disabled: loading || pageReadOnly || morningReadStatus !== "loaded" || storeAccessLoading || closingSavingRef.current,
-              })}
+              {(!hasNightRecord || canCorrectClose) && actionButton(
+                hasNightRecord ? "Save Correction" : "Submit Daily Close",
+                () => saveClosingAndSales(),
+                {
+                  primary: true,
+                  disabled: loading || closingReadOnly || (hasNightRecord && !nightRevision) || morningReadStatus !== "loaded" || storeAccessLoading || closingSavingRef.current,
+                }
+              )}
             </div>
           </>,
           saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
         )}
+        </>}
       </div>
     </div>
   );
