@@ -56,10 +56,19 @@ export default function StaffClockPage() {
   useEffect(() => {
     async function checkStoreAccess() {
       try {
-        const res = await fetch("/api/check-store-access");
-        const data = await res.json();
+        const { data: sessionData, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        const token = sessionData.session?.access_token;
+        if (!token) {
+          window.location.href = "/staff/home";
+          return;
+        }
+        const res = await fetch("/api/check-store-access", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const accessData = await res.json();
 
-        if (!data.allowed) {
+        if (!accessData.allowed) {
           window.location.href = "/staff/home";
         }
       } catch (error) {
@@ -182,10 +191,21 @@ export default function StaffClockPage() {
     async function checkStoreAccess() {
       setStoreAccessLoading(true);
       try {
-        const res = await fetch("/api/check-store-access");
-        const data = await res.json();
-        setIsStoreDevice(!!data.allowed);
-        setDetectedIp(data.ip || "");
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        const token = sessionData.session?.access_token;
+        if (!token) {
+          setIsStoreDevice(false);
+          setDetectedIp("");
+          return;
+        }
+        const res = await fetch("/api/check-store-access", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const accessData = await res.json();
+        setIsStoreDevice(!!accessData.allowed);
+        setDetectedIp(accessData.ip || "");
       } catch (error) {
         console.log("check store access error:", error);
         setIsStoreDevice(false);

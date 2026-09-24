@@ -3,9 +3,39 @@ import { createClient } from "@supabase/supabase-js";
 
 const ALLOWED_STORE_IPS = ["144.139.237.2"];
 
+type AllowedRole = "STAFF" | "MANAGER" | "OWNER";
+type AccessMode = "OWNER_REMOTE" | "STORE_NETWORK" | "DENIED";
+type DeniedReason =
+  | "AUTH_REQUIRED"
+  | "AUTH_INVALID"
+  | "PROFILE_NOT_FOUND"
+  | "PROFILE_INACTIVE"
+  | "PROFILE_READ_ERROR"
+  | "ROLE_NOT_ALLOWED"
+  | "STORE_NETWORK_REQUIRED"
+  | "SERVER_ERROR";
+
+type StoreAccessResponse = {
+  allowed: boolean;
+  role: AllowedRole | null;
+  accessMode: AccessMode;
+  reason?: DeniedReason;
+  // Temporary compatibility fields for existing callers.
+  isStoreDevice: boolean;
+  isStoreIp: boolean;
+  isOwner: boolean;
+  ip: string;
+};
+
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
 );
 
 function getClientIp(req: NextApiRequest) {
@@ -27,61 +57,109 @@ function getClientIp(req: NextApiRequest) {
   return req.socket.remoteAddress || "";
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+function responseBody(
+  ip: string,
+  allowed: boolean,
+  role: AllowedRole | null,
+  accessMode: AccessMode,
+  reason?: DeniedReason
+): StoreAccessResponse {
+  const isStoreIp = ALLOWED_STORE_IPS.includes(ip);
+  return {
+    allowed,
+    role,
+    accessMode,
+    ...(reason ? { reason } : {}),
+    isStoreDevice: allowed,
+    isStoreIp,
+    isOwner: role === "OWNER",
+    ip,
+  };
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<StoreAccessResponse>
+) {
+  const ip = getClientIp(req);
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7).trim()
+    : "";
+
+  if (!token) {
+    return res
+      .status(401)
+      .json(responseBody(ip, false, null, "DENIED", "AUTH_REQUIRED"));
+  }
+
   try {
-    const ip = getClientIp(req);
+    const { data: userData, error: userError } =
+      await supabaseAdmin.auth.getUser(token);
 
-    // 本地开发直接放行
-    if (process.env.NODE_ENV !== "production") {
-      return res.status(200).json({
-        allowed: true,
-        ip,
-        reason: "local-dev",
-      });
+    if (userError || !userData.user) {
+      return res
+        .status(401)
+        .json(responseBody(ip, false, null, "DENIED", "AUTH_INVALID"));
     }
 
-    const isStoreIp = ALLOWED_STORE_IPS.includes(ip);
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("role,is_active")
+      .eq("id", userData.user.id)
+      .maybeSingle();
 
-    // 从前端带来的 access token
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-
-    let isOwner = false;
-    let userId: string | null = null;
-
-    if (token) {
-      const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
-
-      if (!userError && userData.user) {
-        userId = userData.user.id;
-
-        const { data: profile, error: profileError } = await supabaseAdmin
-          .from("profiles")
-          .select("role")
-          .eq("id", userId)
-          .maybeSingle();
-
-        if (!profileError && profile?.role === "OWNER") {
-          isOwner = true;
-        }
-      }
+    if (profileError) {
+      return res
+        .status(503)
+        .json(responseBody(ip, false, null, "DENIED", "PROFILE_READ_ERROR"));
     }
 
-    const allowed = isStoreIp || isOwner;
+    if (!profile) {
+      return res
+        .status(403)
+        .json(responseBody(ip, false, null, "DENIED", "PROFILE_NOT_FOUND"));
+    }
 
-    return res.status(200).json({
-      allowed,
-      ip,
-      isStoreIp,
-      isOwner,
-      userId,
-    });
-  } catch (e: any) {
-    return res.status(500).json({
-      allowed: false,
-      error: e?.message || "Server error",
-    });
+    if (profile.is_active !== true) {
+      return res
+        .status(403)
+        .json(responseBody(ip, false, null, "DENIED", "PROFILE_INACTIVE"));
+    }
+
+    const role = profile.role;
+    if (role !== "STAFF" && role !== "MANAGER" && role !== "OWNER") {
+      return res
+        .status(403)
+        .json(responseBody(ip, false, null, "DENIED", "ROLE_NOT_ALLOWED"));
+    }
+
+    if (role === "OWNER") {
+      return res
+        .status(200)
+        .json(responseBody(ip, true, role, "OWNER_REMOTE"));
+    }
+
+    if (!ALLOWED_STORE_IPS.includes(ip)) {
+      return res
+        .status(403)
+        .json(
+          responseBody(
+            ip,
+            false,
+            role,
+            "DENIED",
+            "STORE_NETWORK_REQUIRED"
+          )
+        );
+    }
+
+    return res
+      .status(200)
+      .json(responseBody(ip, true, role, "STORE_NETWORK"));
+  } catch {
+    return res
+      .status(500)
+      .json(responseBody(ip, false, null, "DENIED", "SERVER_ERROR"));
   }
 }
