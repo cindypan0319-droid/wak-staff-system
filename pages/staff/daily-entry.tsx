@@ -7,10 +7,11 @@ const EPS = 0.01;
 
 const WAK_BLUE = "#1E5A9E";
 const WAK_RED = "#ED1C24";
-const WAK_BG = "#F5F6F8";
-const BORDER = "#E5E7EB";
+const WAK_BG = "#F5F7FA";
+const BORDER = "#E1E5EB";
 const TEXT = "#111827";
 const MUTED = "#6B7280";
+const FONT_STACK = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
 type Platform = {
   id: number | string;
@@ -129,6 +130,13 @@ function round2(n: number) {
 
 function money(n: number) {
   return n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+}
+
+function businessDateLabel(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (!year || !month || !day || !monthNames[month - 1]) return value;
+  return `${monthNames[month - 1]} ${day}, ${year}`;
 }
 
 type MoneyValidation =
@@ -288,6 +296,23 @@ function canonicalPlatformName(name: string) {
       return "MENULOG";
     default:
       return trimmed;
+  }
+}
+
+function platformDisplayName(name: string) {
+  switch (canonicalPlatformName(name)) {
+    case "UBER_EATS":
+      return "Uber Eats";
+    case "DOORDASH":
+      return "DoorDash";
+    case "WAK":
+      return "WAK";
+    case "DELIVEROO":
+      return "Deliveroo";
+    case "MENULOG":
+      return "Menulog";
+    default:
+      return name;
   }
 }
 
@@ -1265,12 +1290,21 @@ export default function DailyEntryPage() {
     return undefined;
   }
 
-  function sectionCard(title: string, children: React.ReactNode, rightBadge?: React.ReactNode) {
+  function sectionCard(
+    title: string,
+    children: React.ReactNode,
+    rightBadge?: React.ReactNode,
+    variant: "inner" | "main" = "inner"
+  ) {
     return (
       <div
         style={{
-          borderBottom: `1px solid ${BORDER}`,
-          padding: "14px 0 18px",
+          border: `1px solid ${variant === "main" ? "#E0E5EC" : "#E5E9EF"}`,
+          borderRadius: variant === "main" ? 16 : 12,
+          background: variant === "main" ? "#FFFFFF" : "#F8FAFC",
+          padding: variant === "main" ? "clamp(16px, 3vw, 24px)" : 16,
+          marginBottom: 16,
+          boxShadow: variant === "main" ? "0 8px 28px rgba(24, 39, 75, 0.06)" : "none",
         }}
       >
         <div
@@ -1295,12 +1329,36 @@ export default function DailyEntryPage() {
     return (
       <div
         style={{
-          padding: "4px 10px 4px 0",
-          minWidth: 112,
+          padding: "9px 11px",
+          minWidth: 108,
+          flex: "1 1 108px",
+          borderRadius: 10,
+          background: "#F0F4F8",
+          border: "1px solid #E3E8EF",
         }}
       >
         <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
-        <div style={{ fontWeight: 800, fontSize: 16, color: color || TEXT }}>{value}</div>
+        <div style={{ fontWeight: 800, fontSize: 16, color: color || TEXT, marginTop: 2 }}>{value}</div>
+      </div>
+    );
+  }
+
+  function warningCallout(children: React.ReactNode) {
+    return (
+      <div
+        style={{
+          border: "1px solid #FECACA",
+          background: "#FFF5F5",
+          color: "#991B1B",
+          borderRadius: 10,
+          padding: "9px 11px",
+          fontSize: 13,
+          fontWeight: 700,
+          lineHeight: 1.4,
+          marginBottom: 12,
+        }}
+      >
+        ⚠ {children}
       </div>
     );
   }
@@ -1349,6 +1407,7 @@ export default function DailyEntryPage() {
           color: textColor,
           fontWeight: 800,
           fontSize: 15,
+          fontFamily: FONT_STACK,
           cursor: disabled ? "not-allowed" : "pointer",
           boxShadow: primary || danger ? "0 8px 18px rgba(0,0,0,0.10)" : "none",
         }}
@@ -1368,7 +1427,7 @@ export default function DailyEntryPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(138px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(158px, 1fr))",
           gap: "10px 12px",
         }}
       >
@@ -1376,12 +1435,15 @@ export default function DailyEntryPage() {
           <div
             key={key}
             style={{
-              padding: "4px 0",
+              padding: 10,
+              border: "1px solid #E2E7EE",
+              borderRadius: 10,
+              background: "#FFFFFF",
             }}
           >
             <div
               style={{
-                fontSize: 12,
+                fontSize: 13,
                 color: TEXT,
                 fontWeight: 600,
                 marginBottom: 5,
@@ -1392,6 +1454,7 @@ export default function DailyEntryPage() {
             </div>
 
             <input
+              className="cashup-input"
               value={counts[key] ?? ""}
               onChange={(e) => setCountsField(setCounts, key, e.target.value, section)}
               disabled={readOnly}
@@ -1400,9 +1463,10 @@ export default function DailyEntryPage() {
                 boxSizing: "border-box",
                 padding: "9px 10px",
                 borderRadius: 8,
-                border: "1px solid #D1D5DB",
+                border: "1px solid #D6DAE1",
                 fontSize: 16,
                 background: "#fff",
+                fontFamily: FONT_STACK,
               }}
               inputMode="numeric"
             />
@@ -1431,23 +1495,31 @@ export default function DailyEntryPage() {
       style={{
         background: WAK_BG,
         minHeight: "100vh",
-        padding: "14px clamp(12px, 3vw, 22px) 28px",
+        padding: "16px clamp(12px, 3vw, 28px) 32px",
+        fontFamily: FONT_STACK,
+        color: TEXT,
       }}
     >
-      <div style={{ maxWidth: 980, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1160, margin: "0 auto" }}>
         <div
+          className="cashup-header"
           style={{
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "flex-end",
-            gap: 16,
+            alignItems: "center",
+            gap: 20,
             flexWrap: "wrap",
-            marginBottom: 10,
+            marginBottom: 14,
+            padding: "16px 18px",
+            background: "#FFFFFF",
+            border: "1px solid #E0E5EC",
+            borderRadius: 14,
+            boxShadow: "0 6px 22px rgba(24, 39, 75, 0.06)",
           }}
         >
           <div>
             <h1 style={{ margin: 0, color: TEXT, fontSize: 28 }}>Daily Cashup</h1>
-            <div style={{ marginTop: 3, color: MUTED, fontSize: 13 }}>{date} · {activeTab === "morning"
+            <div style={{ marginTop: 3, color: MUTED, fontSize: 13 }}>{businessDateLabel(date)} · {activeTab === "morning"
               ? hasMorningRecord ? "Morning saved" : "Morning not saved"
               : closingStatus}</div>
             <div style={{ marginTop: 7 }}>
@@ -1472,10 +1544,11 @@ export default function DailyEntryPage() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+          <div className="cashup-header-actions" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
             <div>
               <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Business date</div>
               <input
+                className="cashup-input"
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -1486,6 +1559,7 @@ export default function DailyEntryPage() {
                   border: `1px solid ${BORDER}`,
                   fontSize: 15,
                   background: "#fff",
+                  fontFamily: FONT_STACK,
                 }}
               />
             </div>
@@ -1525,21 +1599,23 @@ export default function DailyEntryPage() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 8, borderBottom: `1px solid ${BORDER}` }}>
+        <div style={{ display: "inline-flex", gap: 4, marginBottom: 14, padding: 4, borderRadius: 11, background: "#E9EDF3", border: "1px solid #E0E5EC" }}>
           {(["morning", "closing"] as const).map((tab) => (
             <button
               key={tab}
               type="button"
               onClick={() => setActiveTab(tab)}
               style={{
-                border: 0,
-                borderBottom: activeTab === tab ? `3px solid ${WAK_BLUE}` : "3px solid transparent",
-                background: "transparent",
+                border: activeTab === tab ? "1px solid #D7E2F0" : "1px solid transparent",
+                borderRadius: 8,
+                background: activeTab === tab ? "#FFFFFF" : "transparent",
                 color: activeTab === tab ? WAK_BLUE : MUTED,
-                padding: "12px 18px",
-                fontSize: 16,
+                padding: "9px 18px",
+                fontSize: 15,
                 fontWeight: 800,
+                fontFamily: FONT_STACK,
                 cursor: "pointer",
+                boxShadow: activeTab === tab ? "0 2px 6px rgba(24, 39, 75, 0.08)" : "none",
               }}
             >
               {tab === "morning" ? "Morning" : "Closing"}
@@ -1548,7 +1624,7 @@ export default function DailyEntryPage() {
         </div>
 
         {activeTab === "morning" && sectionCard(
-          "Morning",
+          "Morning Cashup",
           <>
             <div style={{ color: MUTED, fontSize: 13, marginBottom: 10 }}>
               Count the actual cash in the till. Target float: {money(DEFAULT_FLOAT_IF_NO_MORNING)}.
@@ -1563,14 +1639,10 @@ export default function DailyEntryPage() {
               )}
             </div>
             {morningReadStatus !== "loaded" && (
-              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
-                {morningReadStatus === "error" ? "Saved Morning Cashup could not be loaded." : "Checking saved Morning Cashup..."}
-              </div>
+              warningCallout(morningReadStatus === "error" ? "Saved Morning Cashup could not be loaded." : "Checking saved Morning Cashup...")
             )}
             {morningRecountAcknowledged && Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) >= EPS && (
-              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
-                Recount acknowledged. Save again to keep the actual {money(morningTotal)} count.
-              </div>
+              warningCallout(<>Recount acknowledged. Save again to keep the actual {money(morningTotal)} count.</>)
             )}
             {renderDenomGrid(morningCounts, setMorningCounts, "morning")}
             <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -1580,16 +1652,28 @@ export default function DailyEntryPage() {
                 disabled: loading || morningReadOnly || storeAccessLoading || morningSavingRef.current,
               })}
             </div>
-          </>
+          </>,
+          undefined,
+          "main"
         )}
 
         {activeTab === "closing" && (
           <>
             <div
               style={{
+                background: "#FFFFFF",
+                border: "1px solid #E0E5EC",
+                borderRadius: 16,
+                boxShadow: "0 8px 28px rgba(24, 39, 75, 0.06)",
+                padding: "clamp(14px, 2.5vw, 22px)",
+              }}
+            >
+            <div
+              className="closing-grid"
+              style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))",
-                gap: "0 clamp(20px, 4vw, 34px)",
+                gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)",
+                gap: "0 clamp(16px, 3vw, 28px)",
                 alignItems: "start",
               }}
             >
@@ -1598,14 +1682,10 @@ export default function DailyEntryPage() {
                   "Till Count",
                   <>
                     {morningReadStatus === "loaded" && !hasMorningRecord && (
-                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13, lineHeight: 1.4 }}>
-                        No Morning Cashup. Closing uses the default $400 opening float, so variance may not reflect today accurately.
-                      </div>
+                      warningCallout("No Morning Cashup. Closing uses the default $400 opening float, so variance may not reflect today accurately.")
                     )}
                     {morningReadStatus === "error" && (
-                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
-                        Morning Cashup could not be loaded. Refresh before closing.
-                      </div>
+                      warningCallout("Morning Cashup could not be loaded. Refresh before closing.")
                     )}
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
                       {moneyBadge("Night total", money(nightTotal))}
@@ -1614,14 +1694,10 @@ export default function DailyEntryPage() {
                       {moneyBadge("Target removal", money(targetRemovedCash), WAK_BLUE)}
                     </div>
                     {nightTotal < DEFAULT_FLOAT_IF_NO_MORNING && (
-                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
-                        Till is {money(DEFAULT_FLOAT_IF_NO_MORNING - nightTotal)} below the next-day float. Remove {money(0)}.
-                      </div>
+                      warningCallout(<>Till is {money(DEFAULT_FLOAT_IF_NO_MORNING - nightTotal)} below the next-day float. Remove {money(0)}.</>)
                     )}
                     {nightRecountAcknowledged && needReason() && (
-                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
-                        Recount acknowledged. Add a difference reason before saving.
-                      </div>
+                      warningCallout("Recount acknowledged. Add a difference reason before saving.")
                     )}
                     {renderDenomGrid(nightCounts, setNightCounts, "night")}
                   </>,
@@ -1638,9 +1714,7 @@ export default function DailyEntryPage() {
                       {moneyBadge("Closing float", money(projectedClosingFloat), Math.abs(closingFloatVariance) < EPS ? TEXT : WAK_RED)}
                     </div>
                     {removedRecountAcknowledged && Math.abs(removedVsShouldDiff) >= EPS && (
-                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
-                        Recount acknowledged. The actual removed count and closing-float difference will be saved.
-                      </div>
+                      warningCallout("Recount acknowledged. The actual removed count and closing-float difference will be saved.")
                     )}
                     {renderDenomGrid(removedCounts, setRemovedCounts, "removed")}
                   </>
@@ -1655,25 +1729,27 @@ export default function DailyEntryPage() {
                       <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                         CASH Sales
                         <input
+                          className="cashup-input"
                           value={cashSalesText}
                           disabled={closingReadOnly}
                           onChange={(e) => {
                             setCashSalesText(e.target.value);
                             markClosingDirtyStyleOnly();
                           }}
-                          style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 16, background: "#fff" }}
+                          style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 9, border: "1px solid #D6DAE1", fontSize: 16, background: "#fff", fontFamily: FONT_STACK }}
                         />
                       </label>
                       <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                         EFTPOS Sales
                         <input
+                          className="cashup-input"
                           value={eftposSalesText}
                           disabled={closingReadOnly}
                           onChange={(e) => {
                             setEftposSalesText(e.target.value);
                             markClosingDirtyStyleOnly();
                           }}
-                          style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 16, background: "#fff" }}
+                          style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 9, border: "1px solid #D6DAE1", fontSize: 16, background: "#fff", fontFamily: FONT_STACK }}
                         />
                       </label>
                     </div>
@@ -1684,6 +1760,7 @@ export default function DailyEntryPage() {
                     <label style={{ display: "block", fontSize: 13, color: TEXT, fontWeight: 700 }}>
                       Notes <span style={{ color: MUTED, fontWeight: 500 }}>(optional)</span>
                       <textarea
+                        className="cashup-input"
                         value={notes}
                         disabled={closingReadOnly}
                         onChange={(e) => {
@@ -1691,7 +1768,7 @@ export default function DailyEntryPage() {
                           markClosingDirtyStyleOnly();
                         }}
                         rows={2}
-                        style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "9px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 15, background: "#fff", resize: "vertical" }}
+                        style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "9px 11px", borderRadius: 9, border: "1px solid #D6DAE1", fontSize: 15, background: "#fff", resize: "vertical", fontFamily: FONT_STACK }}
                       />
                     </label>
                   </>
@@ -1706,8 +1783,9 @@ export default function DailyEntryPage() {
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12 }}>
                         {platforms.map((p) => (
                           <label key={p.id} style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
-                            {p.name} {!p.is_active && <span style={{ color: MUTED, fontWeight: 500 }}>(inactive)</span>}
+                            {platformDisplayName(p.name)} {!p.is_active && <span style={{ color: MUTED, fontWeight: 500 }}>(inactive)</span>}
                             <input
+                              className="cashup-input"
                               value={platformGrossText[canonicalPlatformName(p.name)] ?? ""}
                               disabled={closingReadOnly}
                               onChange={(e) => {
@@ -1715,7 +1793,7 @@ export default function DailyEntryPage() {
                                 setPlatformGrossText((prev) => ({ ...prev, [canonicalName]: e.target.value }));
                                 markClosingDirtyStyleOnly();
                               }}
-                              style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 15, background: "#fff" }}
+                              style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 9, border: "1px solid #D6DAE1", fontSize: 15, background: "#fff", fontFamily: FONT_STACK }}
                             />
                           </label>
                         ))}
@@ -1727,7 +1805,7 @@ export default function DailyEntryPage() {
 
                 {needReason() && sectionCard(
                   "Cash Difference",
-                  <div style={{ borderLeft: `3px solid ${WAK_RED}`, paddingLeft: 12 }}>
+                  <div style={{ border: "1px solid #FECACA", borderLeft: `4px solid ${WAK_RED}`, borderRadius: 10, background: "#FFF5F5", padding: 12 }}>
                     <div style={{ color: WAK_RED, fontWeight: 800, fontSize: 13, marginBottom: 10 }}>
                       Difference: {money(cashVariance)}. Recount the till before choosing a reason.
                     </div>
@@ -1736,13 +1814,14 @@ export default function DailyEntryPage() {
                         <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                           Reason
                           <select
+                            className="cashup-input"
                             value={cashDiffReason}
                             disabled={closingReadOnly}
                             onChange={(e) => {
                               setCashDiffReason(e.target.value as CashDiffReason);
                               markClosingDirtyStyleOnly();
                             }}
-                            style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 14, background: "#fff" }}
+                            style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 9, border: "1px solid #D6DAE1", fontSize: 14, background: "#fff", fontFamily: FONT_STACK }}
                           >
                             <option value="">-- Select a reason --</option>
                             <option value="FLOAT_CHANGED">Cash left in till / float changed</option>
@@ -1756,13 +1835,14 @@ export default function DailyEntryPage() {
                         <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
                           Note {cashDiffReason === "OTHER" ? "(required)" : "(optional)"}
                           <input
+                            className="cashup-input"
                             value={cashDiffNote}
                             disabled={closingReadOnly}
                             onChange={(e) => {
                               setCashDiffNote(e.target.value);
                               markClosingDirtyStyleOnly();
                             }}
-                            style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 14, background: "#fff" }}
+                            style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 9, border: "1px solid #D6DAE1", fontSize: 14, background: "#fff", fontFamily: FONT_STACK }}
                           />
                         </label>
                       </div>
@@ -1781,10 +1861,9 @@ export default function DailyEntryPage() {
                 flexWrap: "wrap",
                 marginTop: 14,
                 padding: "14px 16px",
-                background: "#fff",
-                border: `1px solid ${BORDER}`,
+                background: "#EEF4FB",
+                border: "1px solid #D9E5F3",
                 borderRadius: 12,
-                boxShadow: "0 6px 18px rgba(0,0,0,0.05)",
               }}
             >
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -1801,8 +1880,29 @@ export default function DailyEntryPage() {
                 }
               )}
             </div>
+            </div>
           </>
         )}
+        <style jsx>{`
+          .cashup-input {
+            transition: border-color 140ms ease, box-shadow 140ms ease;
+          }
+          .cashup-input:focus {
+            outline: none;
+            border-color: ${WAK_BLUE} !important;
+            box-shadow: 0 0 0 3px rgba(30, 90, 158, 0.13);
+          }
+          @media (max-width: 800px) {
+            .closing-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+          }
+          @media (max-width: 620px) {
+            .cashup-header-actions {
+              width: 100%;
+            }
+          }
+        `}</style>
       </div>
     </div>
   );
