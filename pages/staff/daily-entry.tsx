@@ -1270,7 +1270,7 @@ export default function DailyEntryPage() {
       <div
         style={{
           borderBottom: `1px solid ${BORDER}`,
-          padding: "18px 0 22px",
+          padding: "14px 0 18px",
         }}
       >
         <div
@@ -1280,10 +1280,10 @@ export default function DailyEntryPage() {
             alignItems: "center",
             gap: 12,
             flexWrap: "wrap",
-            marginBottom: 14,
+            marginBottom: 10,
           }}
         >
-          <h2 style={{ margin: 0, color: TEXT, fontSize: 22 }}>{title}</h2>
+          <h2 style={{ margin: 0, color: TEXT, fontSize: 18 }}>{title}</h2>
           {rightBadge}
         </div>
         {children}
@@ -1295,15 +1295,12 @@ export default function DailyEntryPage() {
     return (
       <div
         style={{
-          padding: "10px 12px",
-          borderRadius: 12,
-          background: "#F9FAFB",
-          border: `1px solid ${BORDER}`,
-          minWidth: 150,
+          padding: "4px 10px 4px 0",
+          minWidth: 112,
         }}
       >
         <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
-        <div style={{ fontWeight: 800, fontSize: 18, color: color || TEXT }}>{value}</div>
+        <div style={{ fontWeight: 800, fontSize: 16, color: color || TEXT }}>{value}</div>
       </div>
     );
   }
@@ -1371,19 +1368,15 @@ export default function DailyEntryPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(120px, 120px))",
-          gap: 10,
-          justifyContent: "start",
+          gridTemplateColumns: "repeat(auto-fit, minmax(138px, 1fr))",
+          gap: "10px 12px",
         }}
       >
         {denomFields.map(({ label, key, value }) => (
           <div
             key={key}
             style={{
-              border: `1px solid ${BORDER}`,
-              borderRadius: 12,
-              padding: 10,
-              background: "#FAFAFA",
+              padding: "4px 0",
             }}
           >
             <div
@@ -1391,12 +1384,11 @@ export default function DailyEntryPage() {
                 fontSize: 12,
                 color: TEXT,
                 fontWeight: 600,
-                marginBottom: 8,
+                marginBottom: 5,
                 lineHeight: 1.3,
-                minHeight: 32,
               }}
             >
-              {label}
+              {label.replace(" notes", "").replace(" coins", "")}
             </div>
 
             <input
@@ -1404,17 +1396,18 @@ export default function DailyEntryPage() {
               onChange={(e) => setCountsField(setCounts, key, e.target.value, section)}
               disabled={readOnly}
               style={{
-                width: 68,
-                padding: "8px 10px",
-                borderRadius: 10,
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "9px 10px",
+                borderRadius: 8,
                 border: "1px solid #D1D5DB",
-                fontSize: 15,
+                fontSize: 16,
                 background: "#fff",
               }}
               inputMode="numeric"
             />
-            <div style={{ marginTop: 7, fontSize: 12, color: MUTED, fontWeight: 700 }}>
-              {money(round2((counts[key] ?? 0) * value))}
+            <div style={{ marginTop: 4, fontSize: 12, color: MUTED, fontWeight: 700 }}>
+              = {money(round2((counts[key] ?? 0) * value))}
             </div>
           </div>
         ))}
@@ -1438,7 +1431,7 @@ export default function DailyEntryPage() {
       style={{
         background: WAK_BG,
         minHeight: "100vh",
-        padding: 20,
+        padding: "14px clamp(12px, 3vw, 22px) 28px",
       }}
     >
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
@@ -1449,14 +1442,34 @@ export default function DailyEntryPage() {
             alignItems: "flex-end",
             gap: 16,
             flexWrap: "wrap",
-            marginBottom: 18,
+            marginBottom: 10,
           }}
         >
           <div>
-            <h1 style={{ margin: 0, color: TEXT }}>Daily Cashup</h1>
-            <div style={{ marginTop: 6, color: MUTED }}>{date} · {activeTab === "morning"
+            <h1 style={{ margin: 0, color: TEXT, fontSize: 28 }}>Daily Cashup</h1>
+            <div style={{ marginTop: 3, color: MUTED, fontSize: 13 }}>{date} · {activeTab === "morning"
               ? hasMorningRecord ? "Morning saved" : "Morning not saved"
               : closingStatus}</div>
+            <div style={{ marginTop: 7 }}>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "4px 9px",
+                  borderRadius: 999,
+                  background: storeAccessLoading ? "#F3F4F6" : isStoreDevice ? "#DCFCE7" : "#FEF3C7",
+                  color: storeAccessLoading ? MUTED : isStoreDevice ? "#166534" : "#92400E",
+                  fontSize: 12,
+                  fontWeight: 800,
+                }}
+              >
+                {storeAccessLoading
+                  ? "Checking access"
+                  : isStoreDevice
+                  ? callerRole === "OWNER" ? "Owner access" : "Store network"
+                  : `Access not verified${detectedIp ? ` · ${detectedIp}` : ""}`}
+              </span>
+            </div>
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
@@ -1468,8 +1481,8 @@ export default function DailyEntryPage() {
                 onChange={(e) => setDate(e.target.value)}
                 disabled={loading}
                 style={{
-                  padding: "12px 14px",
-                  borderRadius: 12,
+                  padding: "9px 11px",
+                  borderRadius: 9,
                   border: `1px solid ${BORDER}`,
                   fontSize: 15,
                   background: "#fff",
@@ -1481,25 +1494,6 @@ export default function DailyEntryPage() {
             {actionButton("← Back to Home", handleBackHome, { disabled: loading })}
             {loading && <span style={{ color: MUTED, fontWeight: 600 }}>Loading...</span>}
           </div>
-        </div>
-
-        <div
-          style={{
-            border: `1px solid ${isStoreDevice ? "#bbf7d0" : "#fed7aa"}`,
-            background: isStoreDevice ? "#ecfdf5" : "#fff7ed",
-            padding: "12px 14px",
-            borderRadius: 12,
-            marginBottom: 16,
-            color: TEXT,
-          }}
-        >
-          {storeAccessLoading
-            ? "Checking store device access..."
-            : isStoreDevice
-            ? callerRole === "OWNER"
-              ? "✅ Owner access verified."
-              : "✅ Store network verified."
-            : `⚠️ Not on approved store device/network${detectedIp ? ` (IP: ${detectedIp})` : ""}. Saving is disabled.`}
         </div>
 
         {nightReadStatus === "loading" && (
@@ -1516,7 +1510,7 @@ export default function DailyEntryPage() {
           </div>
         )}
 
-        {msg && (
+        {msg && msg !== "✅ Daily Cashup loaded." && (
           <div
             style={{
               border: `1px solid ${BORDER}`,
@@ -1554,356 +1548,250 @@ export default function DailyEntryPage() {
         </div>
 
         {activeTab === "morning" && sectionCard(
-          "Morning Cashup (Open)",
+          "Morning",
           <>
-            <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
-              Count the actual cash physically in the till when opening. The target float is{" "}
-              <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>, but an over/short count is saved as counted after you recount it.
+            <div style={{ color: MUTED, fontSize: 13, marginBottom: 10 }}>
+              Count the actual cash in the till. Target float: {money(DEFAULT_FLOAT_IF_NO_MORNING)}.
             </div>
-
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-              {moneyBadge("Morning total", money(morningTotal))}
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
+              {moneyBadge("Counted", money(morningTotal))}
+              {moneyBadge("Target", money(DEFAULT_FLOAT_IF_NO_MORNING))}
               {moneyBadge(
-                "Difference from $400 target",
+                "Difference",
                 money(round2(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING)),
                 Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) < EPS ? "#15803D" : WAK_RED
               )}
-              {morningReadStatus === "loaded" ? moneyBadge(
-                hasMorningRecord ? "Saved opening float" : "Close fallback if not saved",
-                money(baselineMorningTotal),
-                hasMorningRecord ? WAK_BLUE : WAK_RED
-              ) : <div style={{ color: WAK_RED, fontWeight: 700 }}>
-                {morningReadStatus === "error"
-                  ? "Saved Morning Cashup could not be loaded; opening float is unverified."
-                  : "Checking the saved Morning Cashup..."}
-              </div>}
             </div>
-
-            {morningRecountAcknowledged &&
-              Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) >= EPS && (
-                <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
-                  Recount acknowledged. Save again to preserve the actual {money(morningTotal)} opening count.
-                </div>
-              )}
-
+            {morningReadStatus !== "loaded" && (
+              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
+                {morningReadStatus === "error" ? "Saved Morning Cashup could not be loaded." : "Checking saved Morning Cashup..."}
+              </div>
+            )}
+            {morningRecountAcknowledged && Math.abs(morningTotal - DEFAULT_FLOAT_IF_NO_MORNING) >= EPS && (
+              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
+                Recount acknowledged. Save again to keep the actual {money(morningTotal)} count.
+              </div>
+            )}
             {renderDenomGrid(morningCounts, setMorningCounts, "morning")}
-
-            <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              {saveBadge(morningSaveState, morningDirty, morningSaveError, morningLastSavedAt)}
               {actionButton("Save Morning", () => saveMorning(), {
                 primary: true,
                 disabled: loading || morningReadOnly || storeAccessLoading || morningSavingRef.current,
               })}
             </div>
-          </>,
-          saveBadge(morningSaveState, morningDirty, morningSaveError, morningLastSavedAt)
-        )}
-
-        {activeTab === "closing" && <>
-        {sectionCard(
-          "Closing Cashup (Close)",
-          <>
-            <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
-              Daily cash movement uses <b>Night total − actual saved Morning float</b>. Cash removal separately targets a fixed closing float of{" "}
-              <b>{money(DEFAULT_FLOAT_IF_NO_MORNING)}</b>.
-            </div>
-
-            {morningReadStatus === "loaded" && !hasMorningRecord && (
-              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14, lineHeight: 1.5 }}>
-                No Morning Cashup was recorded for this day. Daily Close will use the default $400 opening float.
-                If the actual opening cash was different, the cash variance may not represent today&apos;s trading accurately.
-              </div>
-            )}
-
-            {morningReadStatus === "error" && (
-              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
-                Morning Cashup could not be loaded. The opening float and cash variance are unverified. Please use Refresh to try again.
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-              {moneyBadge("Night total", money(nightTotal))}
-              {morningReadStatus === "loaded" && moneyBadge("Actual opening float", money(baselineMorningTotal))}
-              {morningReadStatus === "loaded" && moneyBadge("Counted daily cash movement", money(countedDailyCashMovement), WAK_BLUE)}
-              {moneyBadge("Target cash to remove", money(targetRemovedCash), WAK_BLUE)}
-            </div>
-
-            {nightTotal < DEFAULT_FLOAT_IF_NO_MORNING && (
-              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
-                The Night till is {money(DEFAULT_FLOAT_IF_NO_MORNING - nightTotal)} below the required next-day float. Target removed cash is {money(0)}.
-              </div>
-            )}
-
-            {nightRecountAcknowledged && needReason() && (
-              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
-                Night recount acknowledged. Record a cash difference reason below before submitting.
-              </div>
-            )}
-
-            {renderDenomGrid(nightCounts, setNightCounts, "night")}
-          </>,
-          saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
-        )}
-
-        {sectionCard(
-          "Cash Removed",
-          <>
-            <div style={{ color: MUTED, fontSize: 14, marginBottom: 14, lineHeight: 1.6 }}>
-              Count the cash you actually removed from the till.
-            </div>
-
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-              {moneyBadge("Removed total", money(removedTotal))}
-              {moneyBadge("Target removed cash", money(targetRemovedCash))}
-              {moneyBadge(
-                "Removed − target",
-                money(removedVsShouldDiff),
-                Math.abs(removedVsShouldDiff) < EPS ? "#15803D" : WAK_RED
-              )}
-              {moneyBadge("Projected closing float", money(projectedClosingFloat))}
-              {moneyBadge(
-                "Closing float difference",
-                money(closingFloatVariance),
-                Math.abs(closingFloatVariance) < EPS ? "#15803D" : WAK_RED
-              )}
-            </div>
-
-            {removedRecountAcknowledged && Math.abs(removedVsShouldDiff) >= EPS && (
-              <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 14 }}>
-                Removed-cash recount acknowledged. Submission will preserve the actual physical count and its closing-float difference.
-              </div>
-            )}
-
-            {renderDenomGrid(removedCounts, setRemovedCounts, "removed")}
           </>
         )}
 
-        {sectionCard(
-          "Sales",
+        {activeTab === "closing" && (
           <>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 16, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
-                CASH Sales (from POS)
-              </div>
-              <input
-                value={cashSalesText}
-                disabled={closingReadOnly}
-                onChange={(e) => {
-                  setCashSalesText(e.target.value);
-                  markClosingDirtyStyleOnly();
-                }}
-                style={{
-                  width: 260,
-                  maxWidth: "100%",
-                  boxSizing: "border-box",
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #D1D5DB",
-                  fontSize: 16,
-                  background: "#fff",
-                }}
-              />
-            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))",
+                gap: "0 clamp(20px, 4vw, 34px)",
+                alignItems: "start",
+              }}
+            >
+              <div>
+                {sectionCard(
+                  "Till Count",
+                  <>
+                    {morningReadStatus === "loaded" && !hasMorningRecord && (
+                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13, lineHeight: 1.4 }}>
+                        No Morning Cashup. Closing uses the default $400 opening float, so variance may not reflect today accurately.
+                      </div>
+                    )}
+                    {morningReadStatus === "error" && (
+                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
+                        Morning Cashup could not be loaded. Refresh before closing.
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                      {moneyBadge("Night total", money(nightTotal))}
+                      {morningReadStatus === "loaded" && moneyBadge("Opening float", money(baselineMorningTotal))}
+                      {morningReadStatus === "loaded" && moneyBadge("Cash movement", money(countedDailyCashMovement), WAK_BLUE)}
+                      {moneyBadge("Target removal", money(targetRemovedCash), WAK_BLUE)}
+                    </div>
+                    {nightTotal < DEFAULT_FLOAT_IF_NO_MORNING && (
+                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
+                        Till is {money(DEFAULT_FLOAT_IF_NO_MORNING - nightTotal)} below the next-day float. Remove {money(0)}.
+                      </div>
+                    )}
+                    {nightRecountAcknowledged && needReason() && (
+                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
+                        Recount acknowledged. Add a difference reason before saving.
+                      </div>
+                    )}
+                    {renderDenomGrid(nightCounts, setNightCounts, "night")}
+                  </>,
+                  saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
+                )}
 
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 16, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
-                EFTPOS Sales
+                {sectionCard(
+                  "Cash Removed",
+                  <>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                      {moneyBadge("Removed", money(removedTotal))}
+                      {moneyBadge("Target", money(targetRemovedCash))}
+                      {moneyBadge("Difference", money(removedVsShouldDiff), Math.abs(removedVsShouldDiff) < EPS ? "#15803D" : WAK_RED)}
+                      {moneyBadge("Closing float", money(projectedClosingFloat), Math.abs(closingFloatVariance) < EPS ? TEXT : WAK_RED)}
+                    </div>
+                    {removedRecountAcknowledged && Math.abs(removedVsShouldDiff) >= EPS && (
+                      <div style={{ color: WAK_RED, fontWeight: 700, marginBottom: 10, fontSize: 13 }}>
+                        Recount acknowledged. The actual removed count and closing-float difference will be saved.
+                      </div>
+                    )}
+                    {renderDenomGrid(removedCounts, setRemovedCounts, "removed")}
+                  </>
+                )}
               </div>
-              <input
-                value={eftposSalesText}
-                disabled={closingReadOnly}
-                onChange={(e) => {
-                  setEftposSalesText(e.target.value);
-                  markClosingDirtyStyleOnly();
-                }}
-                style={{
-                  width: 260,
-                  maxWidth: "100%",
-                  boxSizing: "border-box",
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #D1D5DB",
-                  fontSize: 16,
-                  background: "#fff",
-                }}
-              />
-            </div>
 
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-              {moneyBadge("Instore subtotal", money(instoreSubtotal))}
-              {morningReadStatus === "loaded" && moneyBadge(
-                "POS cash − counted movement",
-                money(cashVariance),
-                Math.abs(cashVariance) < EPS ? "#15803D" : WAK_RED
-              )}
-            </div>
+              <div>
+                {sectionCard(
+                  "Sales",
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12, marginBottom: 10 }}>
+                      <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
+                        CASH Sales
+                        <input
+                          value={cashSalesText}
+                          disabled={closingReadOnly}
+                          onChange={(e) => {
+                            setCashSalesText(e.target.value);
+                            markClosingDirtyStyleOnly();
+                          }}
+                          style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 16, background: "#fff" }}
+                        />
+                      </label>
+                      <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
+                        EFTPOS Sales
+                        <input
+                          value={eftposSalesText}
+                          disabled={closingReadOnly}
+                          onChange={(e) => {
+                            setEftposSalesText(e.target.value);
+                            markClosingDirtyStyleOnly();
+                          }}
+                          style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 16, background: "#fff" }}
+                        />
+                      </label>
+                    </div>
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+                      {moneyBadge("Instore", money(instoreSubtotal))}
+                      {morningReadStatus === "loaded" && moneyBadge("POS cash difference", money(cashVariance), Math.abs(cashVariance) < EPS ? "#15803D" : WAK_RED)}
+                    </div>
+                    <label style={{ display: "block", fontSize: 13, color: TEXT, fontWeight: 700 }}>
+                      Notes <span style={{ color: MUTED, fontWeight: 500 }}>(optional)</span>
+                      <textarea
+                        value={notes}
+                        disabled={closingReadOnly}
+                        onChange={(e) => {
+                          setNotes(e.target.value);
+                          markClosingDirtyStyleOnly();
+                        }}
+                        rows={2}
+                        style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "9px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 15, background: "#fff", resize: "vertical" }}
+                      />
+                    </label>
+                  </>
+                )}
 
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
-                Notes (optional)
+                {sectionCard(
+                  "Online Platforms",
+                  platforms.length === 0 ? (
+                    <div style={{ color: MUTED, fontSize: 13 }}>No platforms configured.</div>
+                  ) : (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12 }}>
+                        {platforms.map((p) => (
+                          <label key={p.id} style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
+                            {p.name} {!p.is_active && <span style={{ color: MUTED, fontWeight: 500 }}>(inactive)</span>}
+                            <input
+                              value={platformGrossText[canonicalPlatformName(p.name)] ?? ""}
+                              disabled={closingReadOnly}
+                              onChange={(e) => {
+                                const canonicalName = canonicalPlatformName(p.name);
+                                setPlatformGrossText((prev) => ({ ...prev, [canonicalName]: e.target.value }));
+                                markClosingDirtyStyleOnly();
+                              }}
+                              style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 15, background: "#fff" }}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: 10 }}>{moneyBadge("Online subtotal", money(onlineSubtotal))}</div>
+                    </>
+                  )
+                )}
+
+                {needReason() && sectionCard(
+                  "Cash Difference",
+                  <div style={{ borderLeft: `3px solid ${WAK_RED}`, paddingLeft: 12 }}>
+                    <div style={{ color: WAK_RED, fontWeight: 800, fontSize: 13, marginBottom: 10 }}>
+                      Difference: {money(cashVariance)}. Recount the till before choosing a reason.
+                    </div>
+                    {(nightRecountAcknowledged || hasNightRecord) && (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                        <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
+                          Reason
+                          <select
+                            value={cashDiffReason}
+                            disabled={closingReadOnly}
+                            onChange={(e) => {
+                              setCashDiffReason(e.target.value as CashDiffReason);
+                              markClosingDirtyStyleOnly();
+                            }}
+                            style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 14, background: "#fff" }}
+                          >
+                            <option value="">-- Select a reason --</option>
+                            <option value="FLOAT_CHANGED">Cash left in till / float changed</option>
+                            <option value="CASH_REFUND_OR_PAYOUT">Cash paid out / refunds</option>
+                            <option value="CASH_DROP_NOT_COUNTED">Cash drop not counted (safe/other)</option>
+                            <option value="COUNTING_MISTAKE">Counting mistake</option>
+                            <option value="POS_CASH_ADJUSTMENT">POS cash incorrect / adjustment</option>
+                            <option value="OTHER">Other</option>
+                          </select>
+                        </label>
+                        <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
+                          Note {cashDiffReason === "OTHER" ? "(required)" : "(optional)"}
+                          <input
+                            value={cashDiffNote}
+                            disabled={closingReadOnly}
+                            onChange={(e) => {
+                              setCashDiffNote(e.target.value);
+                              markClosingDirtyStyleOnly();
+                            }}
+                            style={{ width: "100%", boxSizing: "border-box", marginTop: 5, padding: "10px 11px", borderRadius: 8, border: "1px solid #D1D5DB", fontSize: 14, background: "#fff" }}
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <textarea
-                value={notes}
-                disabled={closingReadOnly}
-                onChange={(e) => {
-                  setNotes(e.target.value);
-                  markClosingDirtyStyleOnly();
-                }}
-                rows={4}
-                style={{
-                  width: "100%",
-                  maxWidth: 560,
-                  boxSizing: "border-box",
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #D1D5DB",
-                  fontSize: 15,
-                  background: "#fff",
-                  resize: "vertical",
-                }}
-              />
             </div>
 
             <div
               style={{
-                border: "1px dashed #D1D5DB",
-                borderRadius: 14,
-                padding: 14,
-                background: "#FCFCFC",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 16,
+                flexWrap: "wrap",
+                marginTop: 14,
+                padding: "14px 16px",
+                background: "#fff",
+                border: `1px solid ${BORDER}`,
+                borderRadius: 12,
+                boxShadow: "0 6px 18px rgba(0,0,0,0.05)",
               }}
             >
-              <div style={{ fontWeight: 700, color: TEXT, marginBottom: 8 }}>Cash Difference Check</div>
-              <div style={{ color: MUTED, marginBottom: needReason() ? 12 : 0 }}>
-                If the difference is not zero, recount the Night till first. After confirming the recount, choose the actual reason; no reason is generated automatically.
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                {moneyBadge("Instore", money(instoreSubtotal))}
+                {moneyBadge("Online", money(onlineSubtotal))}
+                {moneyBadge("Grand total", money(total), WAK_BLUE)}
               </div>
-
-              {needReason() && (nightRecountAcknowledged || hasNightRecord) && (
-                <>
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>Reason</div>
-                    <select
-                      value={cashDiffReason}
-                      disabled={closingReadOnly}
-                      onChange={(e) => {
-                        setCashDiffReason(e.target.value as CashDiffReason);
-                        markClosingDirtyStyleOnly();
-                      }}
-                      style={{
-                        width: 320,
-                        maxWidth: "100%",
-                        padding: "12px 14px",
-                        borderRadius: 12,
-                        border: "1px solid #D1D5DB",
-                        fontSize: 15,
-                        background: "#fff",
-                      }}
-                    >
-                      <option value="">-- Select a reason --</option>
-                      <option value="FLOAT_CHANGED">Cash left in till / float changed</option>
-                      <option value="CASH_REFUND_OR_PAYOUT">Cash paid out / refunds</option>
-                      <option value="CASH_DROP_NOT_COUNTED">Cash drop not counted (safe/other)</option>
-                      <option value="COUNTING_MISTAKE">Counting mistake</option>
-                      <option value="POS_CASH_ADJUSTMENT">POS cash incorrect / adjustment</option>
-                      <option value="OTHER">Other</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 8 }}>
-                      Note {cashDiffReason === "OTHER" ? "(required)" : "(optional)"}
-                    </div>
-                    <input
-                      value={cashDiffNote}
-                      disabled={closingReadOnly}
-                      onChange={(e) => {
-                        setCashDiffNote(e.target.value);
-                        markClosingDirtyStyleOnly();
-                      }}
-                      style={{
-                        width: 420,
-                        maxWidth: "100%",
-                        boxSizing: "border-box",
-                        padding: "12px 14px",
-                        borderRadius: 12,
-                        border: "1px solid #D1D5DB",
-                        fontSize: 15,
-                        background: "#fff",
-                      }}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-          </>,
-          saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
-        )}
-
-        {sectionCard(
-          "Online Platforms",
-          platforms.length === 0 ? (
-            <div style={{ color: MUTED }}>
-              No platforms configured (Owner can add platforms in Manager → Platforms).
-            </div>
-          ) : (
-            <>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {platforms.map((p) => (
-                  <div
-                    key={p.id}
-                    style={{
-                      border: `1px solid ${BORDER}`,
-                      borderRadius: 12,
-                      padding: 12,
-                      background: "#FAFAFA",
-                      maxWidth: 360,
-                    }}
-                  >
-                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 700, marginBottom: 8 }}>
-                      {p.name} {!p.is_active ? "(historical/inactive)" : ""}
-                    </div>
-                    <input
-                      value={platformGrossText[canonicalPlatformName(p.name)] ?? ""}
-                      disabled={closingReadOnly}
-                      onChange={(e) => {
-                        const canonicalName = canonicalPlatformName(p.name);
-                        setPlatformGrossText((prev) => ({ ...prev, [canonicalName]: e.target.value }));
-                        markClosingDirtyStyleOnly();
-                      }}
-                      style={{
-                        width: 220,
-                        maxWidth: "100%",
-                        boxSizing: "border-box",
-                        padding: "12px 14px",
-                        borderRadius: 12,
-                        border: "1px solid #D1D5DB",
-                        fontSize: 15,
-                        background: "#fff",
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              <div style={{ marginTop: 16 }}>
-                {moneyBadge("Online subtotal", money(onlineSubtotal))}
-              </div>
-            </>
-          )
-        )}
-
-        {sectionCard(
-          "Total Summary",
-          <>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
-              {moneyBadge("Instore subtotal", money(instoreSubtotal))}
-              {moneyBadge("Online subtotal", money(onlineSubtotal))}
-              {moneyBadge("Grand total", money(total), WAK_BLUE)}
-            </div>
-
-            <div style={{ fontSize: 13, color: MUTED, marginBottom: 18 }}>
-              Total is auto-calculated from instore + online.
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
               {(!hasNightRecord || canCorrectClose) && actionButton(
                 hasNightRecord ? "Save Correction" : "Submit Daily Close",
                 () => saveClosingAndSales(),
@@ -1913,10 +1801,8 @@ export default function DailyEntryPage() {
                 }
               )}
             </div>
-          </>,
-          saveBadge(closingSaveState, closingDirty, closingSaveError, closingLastSavedAt)
+          </>
         )}
-        </>}
       </div>
     </div>
   );
