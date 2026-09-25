@@ -951,6 +951,23 @@ export default function ClockAdjustmentPage() {
     setMsg("");
 
     try {
+      const [currentReference, historicalReference] = await Promise.all([
+        supabase.from("work_periods").select("id").eq("matched_shift_id", shiftId).limit(1),
+        supabase.from("work_period_versions").select("id").eq("matched_shift_id", shiftId).limit(1),
+      ]);
+
+      if (currentReference.error || historicalReference.error) {
+        setMsg("Could not verify attendance history for this shift. Please try again before deleting it.");
+        return;
+      }
+
+      if ((currentReference.data?.length ?? 0) > 0 || (historicalReference.data?.length ?? 0) > 0) {
+        setMsg(
+          "This shift is already part of attendance history and can’t be deleted. Please correct the attendance record or change the shift status instead."
+        );
+        return;
+      }
+
       const linkedClock = clocks.find((c) => c.shift_id === shiftId);
 
       if (linkedClock) {
@@ -968,6 +985,26 @@ export default function ClockAdjustmentPage() {
       const { error } = await supabase.from("shifts").delete().eq("id", shiftId);
 
       if (error) {
+        if (error.code === "23503") {
+          if (linkedClock) {
+            const restoreClockLink = await supabase
+              .from("time_clock")
+              .update({ shift_id: shiftId })
+              .eq("id", linkedClock.id);
+
+            if (restoreClockLink.error) {
+              setMsg(
+                "This shift is part of attendance history and could not be deleted, but its clock link could not be restored. Please refresh and repair the clock link before continuing."
+              );
+              return;
+            }
+          }
+
+          setMsg(
+            "This shift is already part of attendance history and can’t be deleted. Please correct the attendance record or change the shift status instead."
+          );
+          return;
+        }
         setMsg("Delete shift failed: " + error.message);
         return;
       }

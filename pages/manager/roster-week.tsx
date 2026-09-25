@@ -1948,9 +1948,32 @@ export default function RosterWeek() {
       return;
     }
 
+    const [currentReference, historicalReference] = await Promise.all([
+      supabase.from("work_periods").select("id").eq("matched_shift_id", drawerShiftId).limit(1),
+      supabase.from("work_period_versions").select("id").eq("matched_shift_id", drawerShiftId).limit(1),
+    ]);
+
+    if (currentReference.error || historicalReference.error) {
+      setMsg("❌ Could not verify attendance history for this shift. Please try again before deleting it.");
+      return;
+    }
+
+    if ((currentReference.data?.length ?? 0) > 0 || (historicalReference.data?.length ?? 0) > 0) {
+      setMsg(
+        "❌ This shift is already part of attendance history and can’t be deleted. Please correct the attendance record or change the shift status instead."
+      );
+      return;
+    }
+
     const del = await supabase.from("shifts").delete().eq("id", drawerShiftId);
 
     if (del.error) {
+      if (del.error.code === "23503") {
+        setMsg(
+          "❌ This shift is already part of attendance history and can’t be deleted. Please correct the attendance record or change the shift status instead."
+        );
+        return;
+      }
       setMsg("❌ Delete failed: " + del.error.message);
       return;
     }
