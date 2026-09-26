@@ -60,18 +60,20 @@ BEGIN
   PERFORM set_config('wak_m13.staff',v_staff::text,true);
   PERFORM set_config('wak_m13.week',v_week::text,true);
 
-  /* A/G: full cover; parent is not an original-staff candidate, child remains independent. */
+  /* A/G: legacy edge jitter snaps to full cover; child remains independent. */
   INSERT INTO public.shifts(store_id,staff_id,shift_start,shift_end,break_minutes,hourly_rate,
     shift_status,created_by,covered_by_staff_id,cover_note)
   VALUES('MOOROOLBARK',v_staff,v_start+interval '17 hours',v_start+interval '21 hours',0,1,
     'COVERED',v_manager,v_cover_staff,'M13_A_PARENT') RETURNING id INTO v_parent;
   INSERT INTO public.shifts(store_id,staff_id,shift_start,shift_end,break_minutes,hourly_rate,
     shift_status,created_by,parent_shift_id,cover_note)
-  VALUES('MOOROOLBARK',v_cover_staff,v_start+interval '17 hours',v_start+interval '21 hours',0,1,
+  VALUES('MOOROOLBARK',v_cover_staff,v_start+interval '17 hours 57 seconds',
+    v_start+interval '21 hours 7 minutes 29 seconds',0,1,
     'SCHEDULED',v_manager,v_parent,'M13_A_CHILD') RETURNING id INTO v_child;
   INSERT INTO public.time_clock(staff_id,shift_id,clock_in_at,clock_out_at,device_tag) VALUES
     (v_staff,v_parent,v_start+interval '17 hours',v_start+interval '21 hours','M13_A_PARENT'),
-    (v_cover_staff,v_child,v_start+interval '17 hours',v_start+interval '21 hours','M13_A_CHILD');
+    (v_cover_staff,v_child,v_start+interval '17 hours 57 seconds',
+      v_start+interval '21 hours 7 minutes 29 seconds','M13_A_CHILD');
 
   /* B: tail cover leaves 10:00-16:00 for the original employee. */
   INSERT INTO public.shifts(store_id,staff_id,shift_start,shift_end,break_minutes,hourly_rate,

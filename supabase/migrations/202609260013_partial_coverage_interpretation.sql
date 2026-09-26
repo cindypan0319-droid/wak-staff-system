@@ -204,8 +204,18 @@ BEGIN
         ELSE
           WITH child_coverage AS (
             SELECT range_agg(tstzrange(
-              greatest(child.shift_start,v_explicit.shift_start),
-              least(child.shift_end,v_explicit.shift_end),'[)'
+              CASE
+                WHEN greatest(child.shift_start,v_explicit.shift_start)
+                  <=v_explicit.shift_start+interval '5 minutes'
+                THEN v_explicit.shift_start
+                ELSE greatest(child.shift_start,v_explicit.shift_start)
+              END,
+              CASE
+                WHEN least(child.shift_end,v_explicit.shift_end)
+                  >=v_explicit.shift_end-interval '5 minutes'
+                THEN v_explicit.shift_end
+                ELSE least(child.shift_end,v_explicit.shift_end)
+              END,'[)'
             )) AS covered
             FROM public.shifts child
             WHERE child.parent_shift_id=v_explicit.id AND child.store_id=p_store_id
@@ -261,8 +271,18 @@ BEGIN
       ), coverage AS (
         SELECT parent.id AS parent_id,count(child.id) AS child_count,
           range_agg(tstzrange(
-            greatest(child.shift_start,parent.shift_start),
-            least(child.shift_end,parent.shift_end),'[)'
+            CASE
+              WHEN greatest(child.shift_start,parent.shift_start)
+                <=parent.shift_start+interval '5 minutes'
+              THEN parent.shift_start
+              ELSE greatest(child.shift_start,parent.shift_start)
+            END,
+            CASE
+              WHEN least(child.shift_end,parent.shift_end)
+                >=parent.shift_end-interval '5 minutes'
+              THEN parent.shift_end
+              ELSE least(child.shift_end,parent.shift_end)
+            END,'[)'
           )) FILTER(WHERE child.id IS NOT NULL) AS covered
         FROM covered_parents parent
         LEFT JOIN public.shifts child ON child.parent_shift_id=parent.id
