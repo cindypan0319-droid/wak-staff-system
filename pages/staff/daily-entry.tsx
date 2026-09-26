@@ -1066,14 +1066,6 @@ export default function DailyEntryPage() {
         return false;
       }
 
-      if (needReason() && cashDiffReason === "OTHER" && !cashDiffNote.trim()) {
-        const text = "❌ Enter a note when the cash difference reason is Other.";
-        setMsg(text);
-        setClosingSaveState("error");
-        setClosingSaveError(text);
-        return false;
-      }
-
       const changedExistingPlatforms = platformInstructions.filter((instruction) =>
         Object.prototype.hasOwnProperty.call(existingPlatformGross, instruction.platform) &&
         existingPlatformGross[instruction.platform] !== instruction.gross_income
@@ -1860,7 +1852,7 @@ export default function DailyEntryPage() {
                           </select>
                         </label>
                         <label style={{ fontSize: 13, color: TEXT, fontWeight: 700 }}>
-                          Note {cashDiffReason === "OTHER" ? "(required)" : "(optional)"}
+                          Note (optional)
                           <input
                             className="cashup-input"
                             value={cashDiffNote}
