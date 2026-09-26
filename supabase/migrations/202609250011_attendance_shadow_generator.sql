@@ -45,6 +45,7 @@ DECLARE
   v_current public.work_period_versions%ROWTYPE;
   v_match_id bigint;
   v_candidate_count integer;
+  v_actual_end timestamptz;
   v_payable_start timestamptz;
   v_payable_end timestamptz;
   v_status text;
@@ -112,6 +113,11 @@ BEGIN
     v_types := ARRAY[]::text[];
     v_severities := ARRAY[]::text[];
     v_match_id := NULL;
+    v_actual_end := CASE
+      WHEN v_clock.clock_out_at IS NULL OR v_clock.clock_out_at > v_clock.clock_in_at
+        THEN v_clock.clock_out_at
+      ELSE NULL
+    END;
     v_payable_start := NULL;
     v_payable_end := NULL;
     v_status := 'NEEDS_REVIEW';
@@ -307,7 +313,7 @@ BEGIN
       OR v_current.disposition IS DISTINCT FROM 'ACTIVE'
       OR v_current.matched_shift_id IS DISTINCT FROM v_match_id
       OR v_current.actual_start_at IS DISTINCT FROM v_clock.clock_in_at
-      OR v_current.actual_end_at IS DISTINCT FROM v_clock.clock_out_at
+      OR v_current.actual_end_at IS DISTINCT FROM v_actual_end
       OR v_current.payable_start_at IS DISTINCT FROM v_payable_start
       OR v_current.payable_end_at IS DISTINCT FROM v_payable_end
       OR v_work_period.store_id IS DISTINCT FROM p_store_id
@@ -325,7 +331,7 @@ BEGIN
         reason_code,change_source,created_by
       ) VALUES (
         v_work_period.id,v_version_number,'ACTIVE',v_match_id,
-        v_clock.clock_in_at,v_clock.clock_out_at,v_payable_start,v_payable_end,
+        v_clock.clock_in_at,v_actual_end,v_payable_start,v_payable_end,
         CASE WHEN v_current.id IS NULL THEN 'SHADOW_GENERATED' ELSE 'SHADOW_REFRESHED' END,
         'SYSTEM',NULL
       ) RETURNING id INTO v_result_version_id;
@@ -356,6 +362,12 @@ BEGIN
           'detector','ATTENDANCE_SHADOW_V1','clock_id',v_clock.id,
           'matched_shift_id',v_match_id
         );
+        IF v_types[v_index]='INVALID_CLOCK_RANGE' THEN
+          v_details := v_details || jsonb_build_object(
+            'raw_clock_in_at',v_clock.clock_in_at,
+            'raw_clock_out_at',v_clock.clock_out_at
+          );
+        END IF;
         IF NOT EXISTS (
           SELECT 1 FROM public.work_period_anomalies a
           WHERE a.work_period_id=v_work_period.id

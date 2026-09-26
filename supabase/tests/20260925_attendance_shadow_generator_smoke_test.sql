@@ -355,15 +355,34 @@ $invalid_range_contract$;
 
 SET LOCAL ROLE service_role;
 DO $invalid_range_detection$
+DECLARE
+  v_raw_clock_in timestamptz;
+  v_raw_clock_out timestamptz;
 BEGIN
   IF current_setting('wak_m11.invalid_inserted',true)='true' THEN
+    SELECT tc.clock_in_at,tc.clock_out_at INTO v_raw_clock_in,v_raw_clock_out
+    FROM public.time_clock tc
+    WHERE tc.device_tag='M11_INVALID_RANGE';
+
     PERFORM public.wak_refresh_attendance_shadow('MOOROOLBARK',current_setting('wak_m11.week')::date,
       current_setting('wak_m11.manager')::uuid);
     IF NOT EXISTS (SELECT 1 FROM public.time_clock tc JOIN public.work_periods wp ON wp.time_clock_id=tc.id
+        JOIN public.work_period_versions v ON v.id=wp.current_version_id
         JOIN public.work_period_anomalies a ON a.work_period_id=wp.id
         WHERE tc.device_tag='M11_INVALID_RANGE' AND a.anomaly_type='INVALID_CLOCK_RANGE'
-          AND a.severity='BLOCKING') THEN
-      RAISE EXCEPTION 'M11_SMOKE_22: insertable invalid range was not detected';
+          AND a.status='OPEN' AND a.severity='BLOCKING'
+          AND wp.status='NEEDS_REVIEW'
+          AND v.payable_start_at IS NULL AND v.payable_end_at IS NULL
+          AND v.actual_start_at=v_raw_clock_in AND v.actual_end_at IS NULL) THEN
+      RAISE EXCEPTION 'M11_SMOKE_22: invalid range canonical state was not safely generated';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM public.time_clock tc
+      WHERE tc.device_tag='M11_INVALID_RANGE'
+        AND tc.clock_in_at IS NOT DISTINCT FROM v_raw_clock_in
+        AND tc.clock_out_at IS NOT DISTINCT FROM v_raw_clock_out
+    ) THEN
+      RAISE EXCEPTION 'M11_SMOKE_22: generator changed the invalid raw clock evidence';
     END IF;
   END IF;
 END
