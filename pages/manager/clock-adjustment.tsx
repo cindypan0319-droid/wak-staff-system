@@ -488,6 +488,8 @@ export default function ClockAdjustmentPage() {
 
   const [coverStaffByShift, setCoverStaffByShift] = useState<Record<number, string>>({});
   const [coverNoteByShift, setCoverNoteByShift] = useState<Record<number, string>>({});
+  const [coverStartByShift, setCoverStartByShift] = useState<Record<number, string>>({});
+  const [coverEndByShift, setCoverEndByShift] = useState<Record<number, string>>({});
   const [canonicalRecords, setCanonicalRecords] = useState<CanonicalAttendanceRecord[]>([]);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("NEEDS_REVIEW");
   const [reviewingWorkPeriodId, setReviewingWorkPeriodId] = useState<number | null>(null);
@@ -1134,6 +1136,21 @@ export default function ClockAdjustmentPage() {
     );
   }
 
+  function coverStartValue(shift: Shift) {
+    return coverStartByShift[shift.id] ?? toLocalInputValue(shift.shift_start).slice(11, 16);
+  }
+
+  function coverEndValue(shift: Shift) {
+    return coverEndByShift[shift.id] ?? toLocalInputValue(shift.shift_end).slice(11, 16);
+  }
+
+  function buildCoverRange(shift: Shift) {
+    const localDate = toLocalInputValue(shift.shift_start).slice(0, 10);
+    const startISO = buildISOFromDateAndTime(localDate, coverStartValue(shift));
+    const endISO = buildISOFromDateAndTime(localDate, coverEndValue(shift));
+    return { startISO, endISO };
+  }
+
   async function createShiftFromClock(
     clock: TimeClock,
     options?: {
@@ -1231,14 +1248,31 @@ export default function ClockAdjustmentPage() {
 
       if (!(await confirmStaffStillActive(selectedCoverStaffId))) return;
 
-      const hourlyRate = await getHourlyRateForShift(selectedCoverStaffId, shift.shift_start);
+      const coverRange = buildCoverRange(shift);
+      const parentStart = new Date(shift.shift_start).getTime();
+      const parentEnd = new Date(shift.shift_end).getTime();
+      const coverStart = new Date(coverRange.startISO).getTime();
+      const coverEnd = new Date(coverRange.endISO).getTime();
 
-      // 1) 先创建顶班员工的新 shift
+      if (
+        Number.isNaN(coverStart) ||
+        Number.isNaN(coverEnd) ||
+        coverEnd <= coverStart ||
+        coverStart < parentStart ||
+        coverEnd > parentEnd
+      ) {
+        setMsg("Cover period must be inside the original shift and end after it starts.");
+        return;
+      }
+
+      const hourlyRate = await getHourlyRateForShift(selectedCoverStaffId, coverRange.startISO);
+
+      // 1) 创建实际 cover 区间，而不是默认复制整条 parent shift
       const insertPayload: any = {
         store_id: STORE_ID,
         staff_id: selectedCoverStaffId,
-        shift_start: shift.shift_start,
-        shift_end: shift.shift_end,
+        shift_start: coverRange.startISO,
+        shift_end: coverRange.endISO,
         break_minutes: shift.break_minutes ?? 0,
         hourly_rate: hourlyRate,
         shift_status: "SCHEDULED",
@@ -1283,7 +1317,7 @@ export default function ClockAdjustmentPage() {
           const endISO = c.adjusted_clock_out_at ?? c.clock_out_at ?? startISO;
           if (!startISO || !endISO) return false;
 
-          return overlaps(startISO, endISO, shift.shift_start, shift.shift_end);
+          return overlaps(startISO, endISO, coverRange.startISO, coverRange.endISO);
         }) ?? null;
 
       if (matchedClock) {
@@ -1299,12 +1333,16 @@ export default function ClockAdjustmentPage() {
         }
 
         setMsg("Cover shift created and linked to the covering staff clock.");
+        setCoverStartByShift((prev) => { const next = { ...prev }; delete next[shift.id]; return next; });
+        setCoverEndByShift((prev) => { const next = { ...prev }; delete next[shift.id]; return next; });
         await fetchData();
         return;
       }
 
       // 4) 没有打卡也允许成功
       setMsg("Cover shift created. No clock was linked yet.");
+      setCoverStartByShift((prev) => { const next = { ...prev }; delete next[shift.id]; return next; });
+      setCoverEndByShift((prev) => { const next = { ...prev }; delete next[shift.id]; return next; });
       await fetchData();
     } catch (e: any) {
       setMsg("Create cover shift failed: " + (e?.message ?? "Unknown error"));
@@ -2067,7 +2105,7 @@ export default function ClockAdjustmentPage() {
                           </div>
                         ) : shift.covered_by_staff_id ? (
                           <div style={{ marginTop: 7, fontSize: 11, color: "#2D5F93", fontWeight: 700 }}>
-                            Covered by {historicalStaffLabel(shift.covered_by_staff_id)}
+                            Covered by {historicalStaffLabel(shift.covered_by_staff_id)} · cover period not linked yet
                           </div>
                         ) : null}
 
@@ -2088,25 +2126,54 @@ export default function ClockAdjustmentPage() {
                         </div>
 
                         {normalizeShiftStatus(shift.shift_status) === "COVERED" ? (
-                          <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
-                            <select
-                              value={getDefaultCoverStaffId(shift, r.coverClock)}
-                              onChange={(e) => setCoverStaffByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
-                              disabled={loading}
-                              style={inputStyle("100%")}
-                            >
-                              <option value="">Covered by…</option>
-                              {activeStaffOptions
-                                .filter((s) => s.id !== shift.staff_id)
-                                .map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                            </select>
-                            <input
-                              value={coverNoteByShift[shift.id] ?? shift.cover_note ?? ""}
-                              onChange={(e) => setCoverNoteByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
-                              disabled={loading}
-                              placeholder="Cover note (optional)"
-                              style={inputStyle("100%")}
-                            />
+                          <div style={{ marginTop: 8, padding: 8, border: `1px solid ${BORDER}`, borderRadius: 8, background: "#FFFDF8" }}>
+                            <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 6 }}>
+                              {coverChildren.length > 0 ? "Add another cover period" : "Set cover period"}
+                            </div>
+                            <div style={{ display: "grid", gap: 6 }}>
+                              <select
+                                value={getDefaultCoverStaffId(shift, r.coverClock)}
+                                onChange={(e) => setCoverStaffByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                                disabled={loading}
+                                style={inputStyle("100%")}
+                              >
+                                <option value="">Covered by…</option>
+                                {activeStaffOptions
+                                  .filter((s) => s.id !== shift.staff_id)
+                                  .map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                              </select>
+
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                                <label>
+                                  <div style={{ fontSize: 10, color: MUTED, marginBottom: 3 }}>From</div>
+                                  <input
+                                    type="time"
+                                    value={coverStartValue(shift)}
+                                    onChange={(e) => setCoverStartByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                                    disabled={loading}
+                                    style={inputStyle("100%")}
+                                  />
+                                </label>
+                                <label>
+                                  <div style={{ fontSize: 10, color: MUTED, marginBottom: 3 }}>To</div>
+                                  <input
+                                    type="time"
+                                    value={coverEndValue(shift)}
+                                    onChange={(e) => setCoverEndByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                                    disabled={loading}
+                                    style={inputStyle("100%")}
+                                  />
+                                </label>
+                              </div>
+
+                              <input
+                                value={coverNoteByShift[shift.id] ?? shift.cover_note ?? ""}
+                                onChange={(e) => setCoverNoteByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                                disabled={loading}
+                                placeholder="Cover note (optional)"
+                                style={inputStyle("100%")}
+                              />
+                            </div>
                           </div>
                         ) : null}
                       </td>
@@ -2221,7 +2288,7 @@ export default function ClockAdjustmentPage() {
                           )}
 
                           {normalizeShiftStatus(shift.shift_status) === "COVERED"
-                            ? actionButton("Create Cover Shift", () => createCoverShiftForRow(shift, r.coverClock), {
+                            ? actionButton(coverChildren.length > 0 ? "Add Cover Period" : "Create Cover Period", () => createCoverShiftForRow(shift, r.coverClock), {
                                 primary: true,
                                 disabled: loading || !getDefaultCoverStaffId(shift, r.coverClock),
                               })
