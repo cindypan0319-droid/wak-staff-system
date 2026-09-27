@@ -466,9 +466,6 @@ export default function ClockAdjustmentPage() {
   const [fromDate, setFromDate] = useState<string>(todayDateInputValue());
   const [toDate, setToDate] = useState<string>(todayDateInputValue());
   const [selectedStaffId, setSelectedStaffId] = useState<string>("ALL");
-  const [appliedFromDate, setAppliedFromDate] = useState<string>(todayDateInputValue());
-  const [appliedToDate, setAppliedToDate] = useState<string>(todayDateInputValue());
-  const [appliedStaffId, setAppliedStaffId] = useState<string>("ALL");
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -573,13 +570,6 @@ export default function ClockAdjustmentPage() {
     }
 
     return true;
-  }
-
-  function applyFilters() {
-    setAppliedFromDate(fromDate);
-    setAppliedToDate(toDate);
-    setAppliedStaffId(selectedStaffId);
-    void fetchData();
   }
 
   async function fetchData() {
@@ -1678,90 +1668,18 @@ export default function ClockAdjustmentPage() {
             boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-              gap: 16,
-              flexWrap: "wrap",
-              marginBottom: 14,
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <div>
-              <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Filters</h2>
+              <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Roster & Clock Tools</h2>
               <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-                Select a date range and optional staff filter, then apply.
+                Create shifts and handle cover or unmatched clock records when needed.
               </div>
             </div>
-
             <div>{actionButton("＋ Create Shift", () => setCreateOpen(true), { primary: true, disabled: loading })}</div>
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              gap: 14,
-              alignItems: "end",
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>From</div>
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                disabled={loading}
-                style={inputStyle(170)}
-              />
-            </div>
-
-            <div>
-              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>To (inclusive)</div>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                disabled={loading}
-                style={inputStyle(170)}
-              />
-            </div>
-
-            <div style={{ minWidth: 150 }}>
-              <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Staff</div>
-              <select
-                value={selectedStaffId}
-                onChange={(e) => setSelectedStaffId(e.target.value)}
-                disabled={loading}
-                style={inputStyle("100%")}
-              >
-                <option value="ALL">All staff</option>
-                {periodStaffOptions.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}{s.isActive ? "" : " (INACTIVE)"}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {actionButton("Apply", applyFilters, { primary: true, disabled: loading })}
-            {actionButton(
-              "Reset",
-              () => {
-                const t = todayDateInputValue();
-                setFromDate(t);
-                setToDate(t);
-                setSelectedStaffId("ALL");
-              },
-              { disabled: loading }
-            )}
-
-            {loading && <span style={{ color: MUTED, fontWeight: 700 }}>Loading...</span>}
           </div>
         </div>
 
-        <AttendanceReviewSection fromDate={appliedFromDate} toDate={appliedToDate} staffId={appliedStaffId} />
+        <AttendanceReviewSection />
 
         {createOpen && (
           <div
@@ -1951,6 +1869,19 @@ export default function ClockAdjustmentPage() {
             </span>
           </summary>
           <div style={{ padding: "0 18px 18px" }}>
+            <div style={{ border: `1px solid ${BORDER}`, borderRadius: 14, padding: 14, marginBottom: 16, background: "#FAFAFA" }}>
+              <div style={{ fontWeight: 800, marginBottom: 6, color: TEXT }}>Legacy tools date range</div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 10 }}>
+                This only controls the old Summary / Adjustment Table below.
+              </div>
+              <div style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
+                <div><div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>From</div><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} disabled={loading} style={inputStyle(160)} /></div>
+                <div><div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>To</div><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} disabled={loading} style={inputStyle(160)} /></div>
+                <div style={{ minWidth: 160 }}><div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Staff</div><select value={selectedStaffId} onChange={(e) => setSelectedStaffId(e.target.value)} disabled={loading} style={inputStyle("100%")}><option value="ALL">All staff</option>{periodStaffOptions.map((s) => <option key={s.id} value={s.id}>{s.name}{s.isActive ? "" : " (INACTIVE)"}</option>)}</select></div>
+                {actionButton("Apply", fetchData, { primary: true, disabled: loading })}
+                {actionButton("Reset", () => { const t = todayDateInputValue(); setFromDate(t); setToDate(t); setSelectedStaffId("ALL"); }, { disabled: loading })}
+              </div>
+            </div>
         <div
           style={{
             border: `1px solid ${BORDER}`,
