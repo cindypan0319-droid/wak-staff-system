@@ -14,7 +14,7 @@ type Anomaly = { id: number; anomaly_type: string; severity: string; details: Re
 type AttendanceRecord = { workPeriod: WorkPeriod; profile: Profile | null; rawClock: RawClock | null; currentVersion: Version | null; matchedShift: Shift | null; openAnomalies: Anomaly[]; localDate: string | null };
 type ListResponse = { ok: true; records: AttendanceRecord[]; staffOptions: Profile[] } | { ok: false; reason: string };
 type ReviewResponse = { ok: true; result: Record<string, unknown> } | { ok: false; reason: string };
-type Draft = { actualStart: string; actualEnd: string; payableStart: string; payableEnd: string; reason: ReviewReason; note: string; adjustPayable: boolean };
+type Draft = { actualStart: string; actualEnd: string; payableStart: string; payableEnd: string; basePayableStart: string; basePayableEnd: string; reason: ReviewReason; note: string; adjustPayable: boolean };
 
 const MELBOURNE = "Australia/Melbourne";
 const BORDER = "#E5E7EB";
@@ -118,6 +118,34 @@ function toIso(value: string) {
 function sameInstant(left: string | null | undefined, right: string | null | undefined) {
   if (!left || !right) return left === right;
   return new Date(left).getTime() === new Date(right).getTime();
+}
+
+function suggestedPayable(record: AttendanceRecord, actualStartValue: string, actualEndValue: string, baseStart: string, baseEnd: string) {
+  const actualStart = toIso(actualStartValue);
+  const actualEnd = toIso(actualEndValue);
+  if (!actualStart || !actualEnd) return { payableStart: baseStart, payableEnd: baseEnd };
+  if (!record.matchedShift) {
+    return { payableStart: inputDateTime(actualStart), payableEnd: inputDateTime(actualEnd) };
+  }
+
+  const actualStartMs = new Date(actualStart).getTime();
+  const actualEndMs = new Date(actualEnd).getTime();
+  const rosterStartMs = new Date(record.matchedShift.shift_start).getTime();
+  const rosterEndMs = new Date(record.matchedShift.shift_end).getTime();
+  const earlyStartSeconds = (rosterStartMs - actualStartMs) / 1000;
+  const lateFinishSeconds = (actualEndMs - rosterEndMs) / 1000;
+
+  const payableStart = actualStartMs >= rosterStartMs
+    ? inputDateTime(actualStart)
+    : earlyStartSeconds <= 300
+      ? inputDateTime(record.matchedShift.shift_start)
+      : baseStart;
+  const payableEnd = actualEndMs <= rosterEndMs
+    ? inputDateTime(actualEnd)
+    : lateFinishSeconds <= 300
+      ? inputDateTime(record.matchedShift.shift_end)
+      : baseEnd;
+  return { payableStart, payableEnd };
 }
 
 function needsReview(record: AttendanceRecord) {
@@ -231,16 +259,40 @@ export default function AttendanceReviewSection() {
     const actualStart = record.currentVersion.actual_start_at ?? record.rawClock?.clock_in_at;
     const actualEnd = record.currentVersion.actual_end_at ?? record.rawClock?.clock_out_at;
     setEditingId(record.workPeriod.id);
+    const payableStart = inputDateTime(record.currentVersion.payable_start_at ?? actualStart);
+    const payableEnd = inputDateTime(record.currentVersion.payable_end_at ?? actualEnd);
     setDraft({
       actualStart: inputDateTime(actualStart),
       actualEnd: inputDateTime(actualEnd),
-      payableStart: inputDateTime(record.currentVersion.payable_start_at ?? actualStart),
-      payableEnd: inputDateTime(record.currentVersion.payable_end_at ?? actualEnd),
+      payableStart,
+      payableEnd,
+      basePayableStart: payableStart,
+      basePayableEnd: payableEnd,
       reason: "CONFIRMED_ACTUAL_WORK",
       note: "",
       adjustPayable: false,
     });
     setError("");
+  }
+
+  function updateActual(record: AttendanceRecord, side: "start" | "end", value: string) {
+    setDraft((current) => {
+      if (!current) return current;
+      const next = side === "start" ? { ...current, actualStart: value } : { ...current, actualEnd: value };
+      if (next.adjustPayable) return next;
+      return {
+        ...next,
+        ...suggestedPayable(record, next.actualStart, next.actualEnd, next.basePayableStart, next.basePayableEnd),
+      };
+    });
+  }
+
+  function cancelPayableAdjustment(record: AttendanceRecord) {
+    setDraft((current) => current ? {
+      ...current,
+      ...suggestedPayable(record, current.actualStart, current.actualEnd, current.basePayableStart, current.basePayableEnd),
+      adjustPayable: false,
+    } : current);
   }
 
   async function save(record: AttendanceRecord, saveAndNext: boolean) {
@@ -342,7 +394,7 @@ export default function AttendanceReviewSection() {
           {!!record.openAnomalies.length && <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 10 }}>{record.openAnomalies.map((anomaly) => <span key={anomaly.id} style={{ color: anomaly.severity === "BLOCKING" ? RED : "#8A4B08", fontSize: 12, fontWeight: 750 }}>{title(anomaly.anomaly_type)} · {title(anomaly.severity)}</span>)}</div>}
           {isOpen && <div style={{ marginTop: 9, color: MUTED, fontSize: 13 }}>Wait for clock out, or use a later manual-work workflow.</div>}
           <details style={{ marginTop: 9, color: MUTED, fontSize: 12 }}><summary>Details</summary><div style={{ marginTop: 5 }}>Status {record.workPeriod.status} · Version {version?.version_number ?? "—"} · Source {version ? title(version.change_source) : "—"} · Work period {record.workPeriod.id}</div></details>
-          {editing && <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${BORDER}` }}><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10 }}><label>Actual start<input type="datetime-local" step={1} value={draft.actualStart} onChange={(event) => setDraft({ ...draft, actualStart: event.target.value })} style={fieldStyle()} /></label><label>Actual end<input type="datetime-local" step={1} value={draft.actualEnd} onChange={(event) => setDraft({ ...draft, actualEnd: event.target.value })} style={fieldStyle()} /></label></div><div style={{ marginTop: 11, padding: 11, borderRadius: 9, background: "#F8FAFC" }}><div style={{ color: MUTED, fontSize: 12 }}>Pay suggestion</div><strong>{time(toIso(draft.payableStart), true)} – {time(toIso(draft.payableEnd), true)}</strong><div><button type="button" onClick={() => setDraft({ ...draft, adjustPayable: !draft.adjustPayable })} style={{ ...buttonStyle(), marginTop: 8 }}>{draft.adjustPayable ? "Use compact preview" : "Adjust payable time"}</button></div></div>{draft.adjustPayable && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginTop: 10 }}><label>Payable start<input type="datetime-local" step={1} value={draft.payableStart} onChange={(event) => setDraft({ ...draft, payableStart: event.target.value })} style={fieldStyle()} /></label><label>Payable end<input type="datetime-local" step={1} value={draft.payableEnd} onChange={(event) => setDraft({ ...draft, payableEnd: event.target.value })} style={fieldStyle()} /></label></div>}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginTop: 10 }}><label>Reason<select value={draft.reason} onChange={(event) => setDraft({ ...draft, reason: event.target.value as ReviewReason })} style={fieldStyle()}><option value="CONFIRMED_ACTUAL_WORK">Confirmed actual work</option><option value="CORRECTED_TIME">Corrected time</option><option value="OTHER">Other</option></select></label><label>Note<input value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} placeholder={draft.reason === "OTHER" ? "Required" : "Optional"} style={fieldStyle()} /></label></div><div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}><button type="button" disabled={saving} onClick={() => void save(record, false)} style={buttonStyle(true)}>Save</button><button type="button" disabled={saving} onClick={() => void save(record, true)} style={buttonStyle()}>Save &amp; Next</button><button type="button" disabled={saving} onClick={() => { setEditingId(null); setDraft(null); }} style={buttonStyle()}>Cancel</button></div></div>}
+          {editing && <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${BORDER}` }}><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10 }}><label>Actual start<input type="datetime-local" step={1} value={draft.actualStart} onChange={(event) => updateActual(record, "start", event.target.value)} style={fieldStyle()} /></label><label>Actual end<input type="datetime-local" step={1} value={draft.actualEnd} onChange={(event) => updateActual(record, "end", event.target.value)} style={fieldStyle()} /></label></div><div style={{ marginTop: 11, padding: 11, borderRadius: 9, background: "#F8FAFC" }}><div style={{ color: MUTED, fontSize: 12 }}>{draft.adjustPayable ? "Manual payable" : "Pay suggestion"}</div><strong>{time(toIso(draft.payableStart), true)} – {time(toIso(draft.payableEnd), true)}</strong><div><button type="button" onClick={() => draft.adjustPayable ? cancelPayableAdjustment(record) : setDraft({ ...draft, adjustPayable: true })} style={{ ...buttonStyle(), marginTop: 8 }}>{draft.adjustPayable ? "Cancel payable adjustment" : "Adjust payable time"}</button></div></div>{draft.adjustPayable && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginTop: 10 }}><label>Payable start<input type="datetime-local" step={1} value={draft.payableStart} onChange={(event) => setDraft({ ...draft, payableStart: event.target.value })} style={fieldStyle()} /></label><label>Payable end<input type="datetime-local" step={1} value={draft.payableEnd} onChange={(event) => setDraft({ ...draft, payableEnd: event.target.value })} style={fieldStyle()} /></label></div>}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginTop: 10 }}><label>Reason<select value={draft.reason} onChange={(event) => setDraft({ ...draft, reason: event.target.value as ReviewReason })} style={fieldStyle()}><option value="CONFIRMED_ACTUAL_WORK">Confirmed actual work</option><option value="CORRECTED_TIME">Corrected time</option><option value="OTHER">Other</option></select></label><label>Note<input value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} placeholder={draft.reason === "OTHER" ? "Required" : "Optional"} style={fieldStyle()} /></label></div><div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}><button type="button" disabled={saving} onClick={() => void save(record, false)} style={buttonStyle(true)}>Save</button><button type="button" disabled={saving} onClick={() => void save(record, true)} style={buttonStyle()}>Save &amp; Next</button><button type="button" disabled={saving} onClick={() => { setEditingId(null); setDraft(null); }} style={buttonStyle()}>Cancel</button></div></div>}
         </article>;
       })}</div></div>)}
     </section>
