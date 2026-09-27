@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
 
-type RangeMode = "DAY" | "WEEK" | "CUSTOM";
 type ReviewFilter = "ALL" | "NEEDS_REVIEW";
 type ReviewReason = "CONFIRMED_ACTUAL_WORK" | "CORRECTED_TIME" | "OTHER";
 type Profile = { id: string; full_name: string | null; preferred_name: string | null; is_active: boolean | null };
@@ -15,6 +14,7 @@ type AttendanceRecord = { workPeriod: WorkPeriod; profile: Profile | null; rawCl
 type ListResponse = { ok: true; records: AttendanceRecord[]; staffOptions: Profile[] } | { ok: false; reason: string };
 type ReviewResponse = { ok: true; result: Record<string, unknown> } | { ok: false; reason: string };
 type Draft = { actualStart: string; actualEnd: string; payableStart: string; payableEnd: string; basePayableStart: string; basePayableEnd: string; reason: ReviewReason; note: string; adjustPayable: boolean };
+type AttendanceReviewSectionProps = { fromDate: string; toDate: string; staffId: string };
 
 const MELBOURNE = "Australia/Melbourne";
 const BORDER = "#E5E7EB";
@@ -27,29 +27,6 @@ function validDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
-}
-
-function melbourneDate() {
-  const parts = new Intl.DateTimeFormat("en-AU", {
-    timeZone: MELBOURNE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
-function addDays(value: string, days: number) {
-  const date = new Date(`${value}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function thursdayFor(value: string) {
-  const date = new Date(`${value}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() - 4 + 7) % 7));
-  return date.toISOString().slice(0, 10);
 }
 
 function name(profile: Profile | null) {
@@ -168,18 +145,10 @@ function buttonStyle(primary = false) {
   return { padding: "8px 11px", border: `1px solid ${primary ? BLUE : "#D0D5DD"}`, borderRadius: 8, background: primary ? BLUE : "#fff", color: primary ? "#fff" : TEXT, fontWeight: 700, cursor: "pointer" } as const;
 }
 
-export default function AttendanceReviewSection() {
+export default function AttendanceReviewSection({ fromDate, toDate, staffId }: AttendanceReviewSectionProps) {
   const router = useRouter();
-  const today = melbourneDate();
-  const [rangeMode, setRangeMode] = useState<RangeMode>("DAY");
-  const [day, setDay] = useState(today);
-  const [weekStart, setWeekStart] = useState(thursdayFor(today));
-  const [customFrom, setCustomFrom] = useState(today);
-  const [customTo, setCustomTo] = useState(today);
-  const [staffId, setStaffId] = useState("ALL");
   const [filter, setFilter] = useState<ReviewFilter>("NEEDS_REVIEW");
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
-  const [staffOptions, setStaffOptions] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -187,21 +156,6 @@ export default function AttendanceReviewSection() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const requestEpoch = useRef(0);
-
-  useEffect(() => {
-    if (!router.isReady) return;
-    const queryDate = Array.isArray(router.query.date) ? router.query.date[0] : router.query.date;
-    if (validDate(queryDate)) {
-      setRangeMode("DAY");
-      setDay(queryDate);
-    }
-  }, [router.isReady, router.query.date]);
-
-  const range = useMemo(() => {
-    if (rangeMode === "DAY") return { from: day, to: day };
-    if (rangeMode === "WEEK") return { from: weekStart, to: addDays(weekStart, 6) };
-    return { from: customFrom, to: customTo };
-  }, [customFrom, customTo, day, rangeMode, weekStart]);
 
   const accessToken = useCallback(async () => {
     const { data, error: sessionError } = await supabase.auth.getSession();
@@ -214,14 +168,14 @@ export default function AttendanceReviewSection() {
   }, [router]);
 
   const load = useCallback(async () => {
-    if (!router.isReady || !validDate(range.from) || !validDate(range.to) || range.from > range.to) return null;
+    if (!router.isReady || !validDate(fromDate) || !validDate(toDate) || fromDate > toDate) return null;
     const requestId = ++requestEpoch.current;
     setLoading(true);
     setError("");
     try {
       const token = await accessToken();
       if (!token) return null;
-      const params = new URLSearchParams({ from: range.from, to: range.to });
+      const params = new URLSearchParams({ from: fromDate, to: toDate });
       if (staffId !== "ALL") params.set("staff_id", staffId);
       const response = await fetch(`/api/attendance/review-list?${params}`, { headers: { Authorization: `Bearer ${token}` } });
       const payload = (await response.json()) as ListResponse;
@@ -232,7 +186,6 @@ export default function AttendanceReviewSection() {
       if (!response.ok || !payload.ok) throw new Error(payload.ok ? "Could not load attendance." : payload.reason);
       if (requestId !== requestEpoch.current) return null;
       setRecords(payload.records);
-      setStaffOptions(payload.staffOptions);
       return payload.records;
     } catch (caught) {
       if (requestId === requestEpoch.current) setError(caught instanceof Error ? caught.message : "Could not load attendance.");
@@ -240,7 +193,7 @@ export default function AttendanceReviewSection() {
     } finally {
       if (requestId === requestEpoch.current) setLoading(false);
     }
-  }, [accessToken, range.from, range.to, router, staffId]);
+  }, [accessToken, fromDate, toDate, router, staffId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -365,16 +318,11 @@ export default function AttendanceReviewSection() {
         <button type="button" onClick={() => void load()} disabled={loading} style={buttonStyle()}>{loading ? "Refreshing…" : "Refresh review"}</button>
       </div>
 
-      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 14 }}>{(["DAY", "WEEK", "CUSTOM"] as RangeMode[]).map((mode) => <button key={mode} type="button" onClick={() => setRangeMode(mode)} style={buttonStyle(rangeMode === mode)}>{title(mode)}</button>)}</div>
-      <div style={{ marginTop: 12 }}>
-        {rangeMode === "DAY" && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}><button type="button" onClick={() => setDay(addDays(day, -1))} style={buttonStyle()}>Previous</button><input type="date" value={day} onChange={(event) => setDay(event.target.value)} style={{ ...fieldStyle(), width: 170 }} /><button type="button" onClick={() => setDay(today)} style={buttonStyle()}>Today</button><button type="button" onClick={() => setDay(addDays(day, 1))} style={buttonStyle()}>Next</button></div>}
-        {rangeMode === "WEEK" && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}><button type="button" onClick={() => setWeekStart(addDays(weekStart, -7))} style={buttonStyle()}>Previous week</button><strong>{dateHeading(weekStart)} – {dateHeading(addDays(weekStart, 6))}</strong><button type="button" onClick={() => setWeekStart(thursdayFor(today))} style={buttonStyle()}>This week</button>{addDays(weekStart, 7) <= thursdayFor(today) && <button type="button" onClick={() => setWeekStart(addDays(weekStart, 7))} style={buttonStyle()}>Next week</button>}</div>}
-        {rangeMode === "CUSTOM" && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}><label>From<input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} style={fieldStyle()} /></label><label>To<input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} style={fieldStyle()} /></label></div>}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginTop: 12 }}>
-        <label><span style={{ display: "block", fontSize: 12, color: MUTED }}>Employee</span><select value={staffId} onChange={(event) => setStaffId(event.target.value)} style={fieldStyle()}><option value="ALL">All Staff</option>{staffOptions.map((person) => <option key={person.id} value={person.id}>{name(person)}{person.is_active === true ? "" : " (INACTIVE)"}</option>)}</select></label>
-        <label><span style={{ display: "block", fontSize: 12, color: MUTED }}>Review filter</span><select value={filter} onChange={(event) => setFilter(event.target.value as ReviewFilter)} style={fieldStyle()}><option value="NEEDS_REVIEW">Needs Review</option><option value="ALL">All</option></select></label>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "end", marginTop: 14 }}>
+        <div style={{ color: MUTED, fontSize: 13 }}>
+          Showing <b style={{ color: TEXT }}>{fromDate}</b> to <b style={{ color: TEXT }}>{toDate}</b>
+        </div>
+        <label style={{ minWidth: 210 }}><span style={{ display: "block", fontSize: 12, color: MUTED }}>Review filter</span><select value={filter} onChange={(event) => setFilter(event.target.value as ReviewFilter)} style={fieldStyle()}><option value="NEEDS_REVIEW">Needs Review</option><option value="ALL">All</option></select></label>
       </div>
 
       {error && <div role="alert" style={{ marginTop: 12, color: RED }}>{error}</div>}
