@@ -466,6 +466,9 @@ export default function ClockAdjustmentPage() {
   const [fromDate, setFromDate] = useState<string>(todayDateInputValue());
   const [toDate, setToDate] = useState<string>(todayDateInputValue());
   const [selectedStaffId, setSelectedStaffId] = useState<string>("ALL");
+  const [appliedFromDate, setAppliedFromDate] = useState<string>(todayDateInputValue());
+  const [appliedToDate, setAppliedToDate] = useState<string>(todayDateInputValue());
+  const [appliedStaffId, setAppliedStaffId] = useState<string>("ALL");
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -570,6 +573,13 @@ export default function ClockAdjustmentPage() {
     }
 
     return true;
+  }
+
+  function applyFilters() {
+    setAppliedFromDate(fromDate);
+    setAppliedToDate(toDate);
+    setAppliedStaffId(selectedStaffId);
+    void fetchData();
   }
 
   async function fetchData() {
@@ -1735,7 +1745,7 @@ export default function ClockAdjustmentPage() {
               </select>
             </div>
 
-            {actionButton("Apply", fetchData, { primary: true, disabled: loading })}
+            {actionButton("Apply", applyFilters, { primary: true, disabled: loading })}
             {actionButton(
               "Reset",
               () => {
@@ -1751,7 +1761,7 @@ export default function ClockAdjustmentPage() {
           </div>
         </div>
 
-        <AttendanceReviewSection />
+        <AttendanceReviewSection fromDate={appliedFromDate} toDate={appliedToDate} staffId={appliedStaffId} />
 
         {createOpen && (
           <div
@@ -1925,6 +1935,22 @@ export default function ClockAdjustmentPage() {
           </div>
         )}
 
+        <details
+          style={{
+            border: `1px solid ${BORDER}`,
+            borderRadius: 18,
+            background: CARD_BG,
+            marginTop: 16,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+          }}
+        >
+          <summary style={{ cursor: "pointer", padding: 18, fontWeight: 800, fontSize: 18, color: TEXT }}>
+            Advanced / Legacy tools
+            <span style={{ marginLeft: 8, color: MUTED, fontWeight: 500, fontSize: 13 }}>
+              Old Summary, Adjustment Table, Create Clock and cover tools
+            </span>
+          </summary>
+          <div style={{ padding: "0 18px 18px" }}>
         <div
           style={{
             border: `1px solid ${BORDER}`,
@@ -2330,6 +2356,8 @@ export default function ClockAdjustmentPage() {
             Use <b>Create Cover Shift</b> for a real cover, or use the <b>Unrostered Staff Detected</b> section when someone was called in extra.
           </div>
         </div>
+          </div>
+        </details>
       </div>
     </div>
   );
