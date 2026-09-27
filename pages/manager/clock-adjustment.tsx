@@ -491,6 +491,7 @@ export default function ClockAdjustmentPage() {
   const [canonicalRecords, setCanonicalRecords] = useState<CanonicalAttendanceRecord[]>([]);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("NEEDS_REVIEW");
   const [reviewingWorkPeriodId, setReviewingWorkPeriodId] = useState<number | null>(null);
+  const [legacyEditingShiftId, setLegacyEditingShiftId] = useState<number | null>(null);
   const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
 
   const handleReviewRangeChange = useCallback((from: string, to: string, staffId: string) => {
@@ -1486,6 +1487,26 @@ export default function ClockAdjustmentPage() {
     });
   }, [filteredShifts, clocks, leaveRows, weekdayRateByStaff, coverStaffByShift, coverNoteByShift]);
 
+  const shiftById = useMemo(() => {
+    return new Map(shifts.map((shift) => [shift.id, shift]));
+  }, [shifts]);
+
+  const coverChildrenByParentId = useMemo(() => {
+    const map = new Map<number, Shift[]>();
+    for (const shift of shifts) {
+      if (!shift.parent_shift_id) continue;
+      map.set(shift.parent_shift_id, [...(map.get(shift.parent_shift_id) ?? []), shift]);
+    }
+    for (const children of map.values()) {
+      children.sort((a, b) => new Date(a.shift_start).getTime() - new Date(b.shift_start).getTime());
+    }
+    return map;
+  }, [shifts]);
+
+  function coverChildrenForShift(shift: Shift) {
+    return coverChildrenByParentId.get(shift.id) ?? [];
+  }
+
   const canonicalByClockId = useMemo(() => {
     const map = new Map<number, CanonicalAttendanceRecord>();
     for (const record of canonicalRecords) {
@@ -1934,7 +1955,7 @@ export default function ClockAdjustmentPage() {
             >
               <thead>
                 <tr>
-                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Hour", "Pay", "Alert", "Actions"].map((head, idx, arr) => (
+                  {["Staff", "Shift & Status", "Clock", "Pay", "Alert", "Actions"].map((head, idx, arr) => (
                     <th
                       key={head}
                       style={{
@@ -1967,6 +1988,9 @@ export default function ClockAdjustmentPage() {
                   const canonicalVersion = canonical?.currentVersion ?? null;
                   const canonicalOpenClock = canonical?.workPeriod.source_type === "CLOCK" && !!canonical?.rawClock && !canonical.rawClock.clock_out_at;
                   const isReviewing = canonical?.workPeriod.id === reviewingWorkPeriodId;
+                  const coverChildren = coverChildrenForShift(shift);
+                  const parentShift = shift.parent_shift_id ? shiftById.get(shift.parent_shift_id) ?? null : null;
+                  const isLegacyEditing = legacyEditingShiftId === shift.id;
 
                   const adjustedInValue = clock
                     ? editIn[clockId!] ?? toLocalInputValue(clock.adjusted_clock_in_at)
@@ -2019,80 +2043,70 @@ export default function ClockAdjustmentPage() {
                           borderBottom: `1px solid ${BORDER}`,
                           borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 150,
+                          minWidth: 220,
                         }}
                       >
-                        <div style={{ fontWeight: 700, color: TEXT }}>{fmtAU(shift.shift_start)}</div>
-                        <div style={{ fontSize: 12, color: TEXT, marginTop: 6, fontWeight: 700 }}>To</div>
-                        <div style={{ fontWeight: 700, color: TEXT, marginTop: 6 }}>{fmtAU(shift.shift_end)}</div>
-                      </td>
+                        <div style={{ fontWeight: 800, color: TEXT }}>
+                          {fmtAU(shift.shift_start)} → {shortTime(shift.shift_end)}
+                        </div>
+                        <div style={{ marginTop: 6 }}>{statusBadge(shift.shift_status)}</div>
 
-                      <td
-                        style={{
-                          padding: "8px 8px",
-                          borderBottom: `1px solid ${BORDER}`,
-                          borderRight: `1px solid ${GRID}`,
-                          verticalAlign: "top",
-                          minWidth: 110,
-                        }}
-                      >
-                        <div style={{ marginBottom: 8 }}>{statusBadge(shift.shift_status)}</div>
-
-                        {shift.parent_shift_id ? (
-                          <div style={{ marginBottom: 8 }}>{badge("COVERING SHIFT", { kind: "green" })}</div>
-                        ) : null}
-
-                        {shift.covered_by_staff_id ? (
-                          <div style={{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
-                            Covered by <b style={{ color: TEXT }}>{historicalStaffLabel(shift.covered_by_staff_id)}</b>
+                        {parentShift ? (
+                          <div style={{ marginTop: 7, fontSize: 11, color: "#2E6B3C", fontWeight: 700 }}>
+                            Covering {historicalStaffLabel(parentShift.staff_id)} · {shortTime(shift.shift_start)}–{shortTime(shift.shift_end)}
                           </div>
                         ) : null}
 
-                        <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Change</div>
-                        <select
-                          value={normalizeShiftStatus(shift.shift_status)}
-                          onChange={(e) => updateShiftStatus(shift.id, e.target.value as ShiftStatus)}
-                          disabled={loading}
-                          style={inputStyle("100%")}
-                        >
-                          <option value="SCHEDULED">Scheduled</option>
-                          <option value="WORKED">Worked</option>
-                          <option value="ABSENT">Absent</option>
-                          <option value="COVERED">Covered</option>
-                          <option value="CANCELLED">Cancelled</option>
-                        </select>
+                        {coverChildren.length > 0 ? (
+                          <div style={{ marginTop: 7, display: "grid", gap: 4 }}>
+                            {coverChildren.map((child) => (
+                              <div key={child.id} style={{ fontSize: 11, color: "#2D5F93", fontWeight: 700 }}>
+                                Covered {shortTime(child.shift_start)}–{shortTime(child.shift_end)} by {historicalStaffLabel(child.staff_id)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : shift.covered_by_staff_id ? (
+                          <div style={{ marginTop: 7, fontSize: 11, color: "#2D5F93", fontWeight: 700 }}>
+                            Covered by {historicalStaffLabel(shift.covered_by_staff_id)}
+                          </div>
+                        ) : null}
+
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Status</div>
+                          <select
+                            value={normalizeShiftStatus(shift.shift_status)}
+                            onChange={(e) => updateShiftStatus(shift.id, e.target.value as ShiftStatus)}
+                            disabled={loading}
+                            style={inputStyle("100%")}
+                          >
+                            <option value="SCHEDULED">Scheduled</option>
+                            <option value="WORKED">Worked</option>
+                            <option value="ABSENT">Absent</option>
+                            <option value="COVERED">Covered</option>
+                            <option value="CANCELLED">Cancelled</option>
+                          </select>
+                        </div>
 
                         {normalizeShiftStatus(shift.shift_status) === "COVERED" ? (
-                          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-                            <div>
-                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Covered by</div>
-                              <select
-                                value={getDefaultCoverStaffId(shift, r.coverClock)}
-                                onChange={(e) => setCoverStaffByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
-                                disabled={loading}
-                                style={inputStyle("100%")}
-                              >
-                                <option value="">Select staff</option>
-                                {activeStaffOptions
-                                  .filter((s) => s.id !== shift.staff_id)
-                                  .map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                      {s.name}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div>
-                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Note</div>
-                              <input
-                                value={coverNoteByShift[shift.id] ?? shift.cover_note ?? ""}
-                                onChange={(e) => setCoverNoteByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
-                                disabled={loading}
-                                placeholder="Optional note"
-                                style={inputStyle("100%")}
-                              />
-                            </div>
+                          <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                            <select
+                              value={getDefaultCoverStaffId(shift, r.coverClock)}
+                              onChange={(e) => setCoverStaffByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                              disabled={loading}
+                              style={inputStyle("100%")}
+                            >
+                              <option value="">Covered by…</option>
+                              {activeStaffOptions
+                                .filter((s) => s.id !== shift.staff_id)
+                                .map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                            <input
+                              value={coverNoteByShift[shift.id] ?? shift.cover_note ?? ""}
+                              onChange={(e) => setCoverNoteByShift((p) => ({ ...p, [shift.id]: e.target.value }))}
+                              disabled={loading}
+                              placeholder="Cover note (optional)"
+                              style={inputStyle("100%")}
+                            />
                           </div>
                         ) : null}
                       </td>
@@ -2103,26 +2117,14 @@ export default function ClockAdjustmentPage() {
                           borderBottom: `1px solid ${BORDER}`,
                           borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 150,
+                          minWidth: 130,
                         }}
                       >
                         {!clock ? (
                           <div style={{ color: MUTED, fontSize: 12 }}>No clock</div>
                         ) : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                            <div>
-                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Raw In</div>
-                              <div style={{ color: TEXT, fontWeight: 700 }}>
-                                {clock.clock_in_at ? fmtAU(clock.clock_in_at) : "—"}
-                              </div>
-                            </div>
-
-                            <div>
-                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Raw Out</div>
-                              <div style={{ color: TEXT, fontWeight: 700 }}>
-                                {clock.clock_out_at ? fmtAU(clock.clock_out_at) : "—"}
-                              </div>
-                            </div>
+                          <div style={{ fontWeight: 800, color: TEXT, whiteSpace: "nowrap" }}>
+                            {shortTime(clock.clock_in_at)} – {clock.clock_out_at ? shortTime(clock.clock_out_at) : "Clocked in"}
                           </div>
                         )}
                       </td>
@@ -2133,59 +2135,24 @@ export default function ClockAdjustmentPage() {
                           borderBottom: `1px solid ${BORDER}`,
                           borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 190,
+                          minWidth: 135,
                         }}
                       >
-                        {!hasClock ? (
-                          <div style={{ color: MUTED, fontSize: 12 }}>No clock to adjust.</div>
+                        {canonicalVersion?.payable_start_at && canonicalVersion?.payable_end_at ? (
+                          <>
+                            <div style={{ fontWeight: 800, color: TEXT, whiteSpace: "nowrap" }}>
+                              {shortTime(canonicalVersion.payable_start_at)} – {shortTime(canonicalVersion.payable_end_at)}
+                            </div>
+                            <div style={{ marginTop: 5, fontSize: 12, color: MUTED }}>
+                              {((new Date(canonicalVersion.payable_end_at).getTime() - new Date(canonicalVersion.payable_start_at).getTime()) / 3600000).toFixed(2)}h
+                            </div>
+                          </>
                         ) : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                            <div>
-                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Adjusted In</div>
-                              <input
-                                type="datetime-local"
-                                value={adjustedInValue}
-                                onChange={(e) => setEditIn((p) => ({ ...p, [clockId!]: e.target.value }))}
-                                style={inputStyle("100%")}
-                              />
-                            </div>
-
-                            <div>
-                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Adjusted Out</div>
-                              <input
-                                type="datetime-local"
-                                value={adjustedOutValue}
-                                onChange={(e) => setEditOut((p) => ({ ...p, [clockId!]: e.target.value }))}
-                                style={inputStyle("100%")}
-                              />
-                            </div>
-
-                            {clock?.adjusted_clock_in_at || clock?.adjusted_clock_out_at ? (
-                              <div style={{ fontSize: 11, color: WAK_BLUE, fontWeight: 700 }}>
-                                Adjusted time saved
-                              </div>
-                            ) : (
-                              <div style={{ fontSize: 11, color: MUTED }}>
-                                No adjustment saved
-                              </div>
-                            )}
-                          </div>
+                          <>
+                            <div style={{ marginBottom: 6 }}>{sourceBadge}</div>
+                            <div style={{ fontWeight: 800, color: TEXT }}>{r.payroll.hours.toFixed(2)}h</div>
+                          </>
                         )}
-                      </td>
-
-                      <td
-                        style={{
-                          padding: "8px 8px",
-                          borderBottom: `1px solid ${BORDER}`,
-                          borderRight: `1px solid ${GRID}`,
-                          verticalAlign: "top",
-                          minWidth: 50,
-                        }}
-                      >
-                        <div style={{ marginBottom: 8 }}>{sourceBadge}</div>
-
-                        <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Hours</div>
-                        <div style={{ fontWeight: 800, color: TEXT }}>{r.payroll.hours.toFixed(2)}h</div>
                       </td>
 
                       <td
@@ -2264,20 +2231,11 @@ export default function ClockAdjustmentPage() {
                               disabled: loading,
                             })
                           ) : (
-                            <>
-                              {actionButton("Save Time", () => saveAdjustment(clockId!), {
-                                primary: true,
-                                disabled: loading,
-                              })}
-
-                              {actionButton("Clear Adjustment", () => clearAdjustment(clockId!), {
-                                disabled: loading,
-                              })}
-
-                              {actionButton("Set to roster", () => setToRoster(clockId!, shift), {
-                                disabled: loading,
-                              })}
-                            </>
+                            actionButton(
+                              isLegacyEditing ? "Close Clock Adjust" : "Adjust Clock",
+                              () => setLegacyEditingShiftId(isLegacyEditing ? null : shift.id),
+                              { disabled: loading }
+                            )
                           )}
 
                           {normalizeShiftStatus(shift.shift_status) === "COVERED"
@@ -2296,7 +2254,7 @@ export default function ClockAdjustmentPage() {
                     </tr>
                     {canonical && isReviewing ? (
                       <tr>
-                        <td colSpan={9} style={{ padding: "10px 12px", borderBottom: `1px solid ${BORDER}`, background: "#FBFCFE" }}>
+                        <td colSpan={6} style={{ padding: "10px 12px", borderBottom: `1px solid ${BORDER}`, background: "#FBFCFE" }}>
                           <AttendanceReviewInlineEditor
                             record={canonical}
                             onCancel={() => setReviewingWorkPeriodId(null)}
@@ -2309,6 +2267,37 @@ export default function ClockAdjustmentPage() {
                         </td>
                       </tr>
                     ) : null}
+
+                    {clock && isLegacyEditing ? (
+                      <tr>
+                        <td colSpan={6} style={{ padding: "10px 12px", borderBottom: `1px solid ${BORDER}`, background: "#FFFDF8" }}>
+                          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+                            <label style={{ minWidth: 220 }}>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Adjusted In</div>
+                              <input
+                                type="datetime-local"
+                                value={adjustedInValue}
+                                onChange={(e) => setEditIn((p) => ({ ...p, [clock.id]: e.target.value }))}
+                                style={inputStyle("100%")}
+                              />
+                            </label>
+                            <label style={{ minWidth: 220 }}>
+                              <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>Adjusted Out</div>
+                              <input
+                                type="datetime-local"
+                                value={adjustedOutValue}
+                                onChange={(e) => setEditOut((p) => ({ ...p, [clock.id]: e.target.value }))}
+                                style={inputStyle("100%")}
+                              />
+                            </label>
+                            {actionButton("Save Time", () => saveAdjustment(clock.id), { primary: true, disabled: loading })}
+                            {actionButton("Clear Adjustment", () => clearAdjustment(clock.id), { disabled: loading })}
+                            {actionButton("Set to roster", () => setToRoster(clock.id, shift), { disabled: loading })}
+                            {actionButton("Close", () => setLegacyEditingShiftId(null), { disabled: loading })}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
                     </Fragment>
                   );
                 })}
@@ -2316,7 +2305,7 @@ export default function ClockAdjustmentPage() {
                 {displayedRows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={6}
                       style={{
                         padding: 14,
                         color: "#9CA3AF",
@@ -2332,7 +2321,7 @@ export default function ClockAdjustmentPage() {
           </div>
 
           <div style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
-            Review adds canonical Pay and warnings without removing your existing roster, cover and clock tools.
+            Review, cover and clock actions stay on the same row; detailed time edits only open when you need them.
           </div>
         </div>
       </div>
