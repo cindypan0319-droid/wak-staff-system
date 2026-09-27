@@ -217,6 +217,12 @@ export default function AttendanceReviewInlineEditor({
   }
 
   async function save() {
+    const reviewVersion = record.currentVersion;
+    if (!reviewVersion) {
+      setError("No canonical review version is available.");
+      return;
+    }
+
     const actualStartIso = toIso(draft.actualStart);
     const actualEndIso = toIso(draft.actualEnd);
     const payableStartIso = toIso(draft.payableStart);
@@ -248,8 +254,8 @@ export default function AttendanceReviewInlineEditor({
         },
         body: JSON.stringify({
           work_period_id: record.workPeriod.id,
-          expected_version_id: version.id,
-          matched_shift_id: version.matched_shift_id,
+          expected_version_id: reviewVersion.id,
+          matched_shift_id: reviewVersion.matched_shift_id,
           actual_start_at: actualStartIso,
           actual_end_at: actualEndIso,
           payable_start_at: payableStartIso,
