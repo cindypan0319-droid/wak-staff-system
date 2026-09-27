@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
-import AttendanceReviewSection from "../../components/AttendanceReviewSection";
+import AttendanceReviewSection, { type ReviewFilter } from "../../components/AttendanceReviewSection";
+import AttendanceReviewInlineEditor, { type CanonicalAttendanceRecord } from "../../components/AttendanceReviewInlineEditor";
 
 type Range = { startISO: string; endISO: string };
 
@@ -487,6 +488,21 @@ export default function ClockAdjustmentPage() {
 
   const [coverStaffByShift, setCoverStaffByShift] = useState<Record<number, string>>({});
   const [coverNoteByShift, setCoverNoteByShift] = useState<Record<number, string>>({});
+  const [canonicalRecords, setCanonicalRecords] = useState<CanonicalAttendanceRecord[]>([]);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("NEEDS_REVIEW");
+  const [reviewingWorkPeriodId, setReviewingWorkPeriodId] = useState<number | null>(null);
+  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
+
+  const handleReviewRangeChange = useCallback((from: string, to: string, staffId: string) => {
+    setFromDate(from);
+    setToDate(to);
+    setSelectedStaffId(staffId);
+  }, []);
+
+  const handleCanonicalRecordsChange = useCallback((records: CanonicalAttendanceRecord[], filter: ReviewFilter) => {
+    setCanonicalRecords(records);
+    setReviewFilter(filter);
+  }, []);
 
   async function loadPermission() {
     setAuthLoading(true);
@@ -1470,6 +1486,53 @@ export default function ClockAdjustmentPage() {
     });
   }, [filteredShifts, clocks, leaveRows, weekdayRateByStaff, coverStaffByShift, coverNoteByShift]);
 
+  const canonicalByClockId = useMemo(() => {
+    const map = new Map<number, CanonicalAttendanceRecord>();
+    for (const record of canonicalRecords) {
+      const clockId = record.workPeriod.time_clock_id ?? record.rawClock?.id ?? null;
+      if (clockId) map.set(clockId, record);
+    }
+    return map;
+  }, [canonicalRecords]);
+
+  const canonicalByShiftId = useMemo(() => {
+    const map = new Map<number, CanonicalAttendanceRecord>();
+    for (const record of canonicalRecords) {
+      const shiftId = record.currentVersion?.matched_shift_id ?? record.workPeriod.matched_shift_id;
+      if (shiftId) map.set(shiftId, record);
+    }
+    return map;
+  }, [canonicalRecords]);
+
+  function canonicalForRow(shift: Shift, clock: TimeClock | null) {
+    if (clock?.id && canonicalByClockId.has(clock.id)) return canonicalByClockId.get(clock.id) ?? null;
+    return canonicalByShiftId.get(shift.id) ?? null;
+  }
+
+  function canonicalNeedsReview(record: CanonicalAttendanceRecord | null) {
+    return !!record && (record.workPeriod.status === "NEEDS_REVIEW" || record.openAnomalies.length > 0);
+  }
+
+  function shortTime(iso: string | null | undefined) {
+    if (!iso) return "—";
+    return new Intl.DateTimeFormat("en-AU", {
+      timeZone: "Australia/Melbourne",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(iso));
+  }
+
+  const displayedRows = useMemo(() => {
+    if (reviewFilter === "ALL") return rows;
+    return rows.filter((row) => {
+      const canonical = canonicalForRow(row.shift, row.clock);
+      return canonicalNeedsReview(canonical) || row.alerts.length > 0;
+    });
+    // canonical maps are derived from canonicalRecords.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, reviewFilter, canonicalRecords]);
+
   const unrosteredClocks = useMemo(() => {
     const matchedClockIds = new Set<number>();
     for (const r of rows) {
@@ -1660,11 +1723,9 @@ export default function ClockAdjustmentPage() {
 
         <AttendanceReviewSection
           onCreateShift={() => setCreateOpen(true)}
-          onRangeChange={(from, to, staffId) => {
-            setFromDate(from);
-            setToDate(to);
-            setSelectedStaffId(staffId);
-          }}
+          onRangeChange={handleReviewRangeChange}
+          onRecordsChange={handleCanonicalRecordsChange}
+          refreshKey={reviewRefreshKey}
         />
 
         {createOpen && (
@@ -1839,49 +1900,6 @@ export default function ClockAdjustmentPage() {
           </div>
         )}
 
-        <details
-          style={{
-            border: `1px solid ${BORDER}`,
-            borderRadius: 18,
-            background: CARD_BG,
-            marginTop: 16,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
-          }}
-        >
-          <summary style={{ cursor: "pointer", padding: 18, fontWeight: 800, fontSize: 18, color: TEXT }}>
-            Advanced / Legacy tools
-            <span style={{ marginLeft: 8, color: MUTED, fontWeight: 500, fontSize: 13 }}>
-              Old Summary, Adjustment Table, Create Clock and cover tools
-            </span>
-          </summary>
-          <div style={{ padding: "0 18px 18px" }}>
-            <div style={{ marginBottom: 14, color: MUTED, fontSize: 12 }}>
-              Uses the same Day / Week / Custom and employee selection above.
-            </div>
-        <div
-          style={{
-            border: `1px solid ${BORDER}`,
-            borderRadius: 18,
-            background: CARD_BG,
-            padding: 18,
-            marginBottom: 16,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
-          }}
-        >
-          <div style={{ marginBottom: 14 }}>
-            <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Summary</h2>
-            <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Payroll time rule: <b>Status</b> → <b>Leave</b> → <b>Adjusted</b> → <b>Raw clock</b> → <b>Roster</b>.
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            {infoCard("Total hours", `${overallSummary.totalHours.toFixed(2)}h`, WAK_BLUE)}
-            {infoCard("Total pay", money(overallSummary.totalPay), WAK_RED)}
-            {infoCard("Rows", String(rows.length))}
-          </div>
-        </div>
-
         <div
           style={{
             border: `1px solid ${BORDER}`,
@@ -1894,7 +1912,7 @@ export default function ClockAdjustmentPage() {
           <div style={{ marginBottom: 14 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: TEXT }}>Adjustment Table</h2>
             <div style={{ marginTop: 6, fontSize: 13, color: MUTED }}>
-              Each row represents one shift. Raw clock is matched to that shift.
+              Roster, clock details and attendance review in one place.
             </div>
           </div>
 
@@ -1916,7 +1934,7 @@ export default function ClockAdjustmentPage() {
             >
               <thead>
                 <tr>
-                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Hour", "Alert", "Actions"].map((head, idx, arr) => (
+                  {["Staff", "Shift", "Status", "Raw Clock", "Adjustment", "Hour", "Pay", "Alert", "Actions"].map((head, idx, arr) => (
                     <th
                       key={head}
                       style={{
@@ -1940,11 +1958,15 @@ export default function ClockAdjustmentPage() {
               </thead>
 
               <tbody>
-                {rows.map((r) => {
+                {displayedRows.map((r) => {
                   const shift = r.shift;
                   const clock = r.clock;
                   const clockId = clock?.id ?? null;
                   const hasClock = !!clockId;
+                  const canonical = canonicalForRow(shift, clock);
+                  const canonicalVersion = canonical?.currentVersion ?? null;
+                  const canonicalOpenClock = canonical?.workPeriod.source_type === "CLOCK" && !!canonical?.rawClock && !canonical.rawClock.clock_out_at;
+                  const isReviewing = canonical?.workPeriod.id === reviewingWorkPeriodId;
 
                   const adjustedInValue = clock
                     ? editIn[clockId!] ?? toLocalInputValue(clock.adjusted_clock_in_at)
@@ -1967,8 +1989,8 @@ export default function ClockAdjustmentPage() {
                       : badge(String(r.payroll.source), { kind: "gray" });
 
                   return (
+                    <Fragment key={shift.id}>
                     <tr
-                      key={shift.id}
                       style={{
                         background: getRowBackground(r.alerts, shift.shift_status),
                       }}
@@ -2172,18 +2194,44 @@ export default function ClockAdjustmentPage() {
                           borderBottom: `1px solid ${BORDER}`,
                           borderRight: `1px solid ${GRID}`,
                           verticalAlign: "top",
-                          minWidth: 90,
+                          minWidth: 110,
+                        }}
+                      >
+                        {canonicalVersion?.payable_start_at && canonicalVersion?.payable_end_at ? (
+                          <div style={{ fontWeight: 800, color: TEXT, whiteSpace: "nowrap" }}>
+                            {shortTime(canonicalVersion.payable_start_at)} – {shortTime(canonicalVersion.payable_end_at)}
+                          </div>
+                        ) : (
+                          <div style={{ color: MUTED, fontSize: 12 }}>—</div>
+                        )}
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "8px 8px",
+                          borderBottom: `1px solid ${BORDER}`,
+                          borderRight: `1px solid ${GRID}`,
+                          verticalAlign: "top",
+                          minWidth: 110,
                         }}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          {r.alerts.length === 0 ? (
+                          {canonical?.openAnomalies?.length ? (
+                            canonical.openAnomalies.map((anomaly) => (
+                              <div key={anomaly.id}>
+                                {badge(
+                                  anomaly.anomaly_type.replaceAll("_", " "),
+                                  { kind: anomaly.severity === "BLOCKING" ? "red" : "yellow" }
+                                )}
+                              </div>
+                            ))
+                          ) : r.alerts.length === 0 ? (
                             badge("OK", { kind: "green" })
                           ) : (
                             <>
                               {r.alerts.map((a, idx) => (
                                 <div key={idx}>{badge(a.label, { kind: a.kind })}</div>
                               ))}
-
                               {r.coverClock && (
                                 <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
                                   Likely cover / unrostered clock: <b style={{ color: TEXT }}>{staffLabel(r.coverClock.staff_id)}</b>
@@ -2203,6 +2251,14 @@ export default function ClockAdjustmentPage() {
                         }}
                       >
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {canonical?.currentVersion ? (
+                            actionButton(
+                              isReviewing ? "Close Review" : "Review",
+                              () => setReviewingWorkPeriodId(isReviewing ? null : canonical.workPeriod.id),
+                              { primary: !isReviewing, disabled: canonicalOpenClock }
+                            )
+                          ) : null}
+
                           {!hasClock ? (
                             actionButton("Create Clock", () => createClockForShift(shift), {
                               disabled: loading,
@@ -2238,13 +2294,29 @@ export default function ClockAdjustmentPage() {
                         </div>
                       </td>
                     </tr>
+                    {canonical && isReviewing ? (
+                      <tr>
+                        <td colSpan={9} style={{ padding: "10px 12px", borderBottom: `1px solid ${BORDER}`, background: "#FBFCFE" }}>
+                          <AttendanceReviewInlineEditor
+                            record={canonical}
+                            onCancel={() => setReviewingWorkPeriodId(null)}
+                            onSaved={() => {
+                              setReviewingWorkPeriodId(null);
+                              setReviewRefreshKey((value) => value + 1);
+                              void fetchData();
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                    </Fragment>
                   );
                 })}
 
-                {rows.length === 0 && (
+                {displayedRows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={9}
                       style={{
                         padding: 14,
                         color: "#9CA3AF",
@@ -2260,11 +2332,9 @@ export default function ClockAdjustmentPage() {
           </div>
 
           <div style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
-            Use <b>Create Cover Shift</b> for a real cover, or use the <b>Unrostered Staff Detected</b> section when someone was called in extra.
+            Review adds canonical Pay and warnings without removing your existing roster, cover and clock tools.
           </div>
         </div>
-          </div>
-        </details>
       </div>
     </div>
   );
