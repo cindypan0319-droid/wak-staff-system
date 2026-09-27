@@ -29,6 +29,29 @@ function validDate(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function melbourneDate() {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: MELBOURNE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function addDays(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function thursdayFor(value: string) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() - 4 + 7) % 7));
+  return date.toISOString().slice(0, 10);
+}
+
 function name(profile: Profile | null) {
   return profile?.preferred_name?.trim() || profile?.full_name?.trim() || "Unknown employee";
 }
