@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { readCurrentProfile, readCurrentUser } from "../../lib/authGuard";
+import AttendanceReviewSection from "../../components/AttendanceReviewSection";
 
 type Range = { startISO: string; endISO: string };
 
@@ -1749,6 +1750,8 @@ export default function ClockAdjustmentPage() {
             {loading && <span style={{ color: MUTED, fontWeight: 700 }}>Loading...</span>}
           </div>
         </div>
+
+        <AttendanceReviewSection />
 
         {createOpen && (
           <div
