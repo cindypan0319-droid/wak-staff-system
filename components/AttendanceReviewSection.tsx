@@ -15,6 +15,10 @@ type AttendanceRecord = { workPeriod: WorkPeriod; profile: Profile | null; rawCl
 type ListResponse = { ok: true; records: AttendanceRecord[]; staffOptions: Profile[] } | { ok: false; reason: string };
 type ReviewResponse = { ok: true; result: Record<string, unknown> } | { ok: false; reason: string };
 type Draft = { actualStart: string; actualEnd: string; payableStart: string; payableEnd: string; basePayableStart: string; basePayableEnd: string; reason: ReviewReason; note: string; adjustPayable: boolean };
+type AttendanceReviewSectionProps = {
+  onRangeChange?: (from: string, to: string, staffId: string) => void;
+  onCreateShift?: () => void;
+};
 
 const MELBOURNE = "Australia/Melbourne";
 const BORDER = "#E5E7EB";
@@ -168,7 +172,7 @@ function buttonStyle(primary = false) {
   return { padding: "8px 11px", border: `1px solid ${primary ? BLUE : "#D0D5DD"}`, borderRadius: 8, background: primary ? BLUE : "#fff", color: primary ? "#fff" : TEXT, fontWeight: 700, cursor: "pointer" } as const;
 }
 
-export default function AttendanceReviewSection() {
+export default function AttendanceReviewSection({ onRangeChange, onCreateShift }: AttendanceReviewSectionProps) {
   const router = useRouter();
   const today = melbourneDate();
   const [rangeMode, setRangeMode] = useState<RangeMode>("DAY");
@@ -234,6 +238,11 @@ export default function AttendanceReviewSection() {
   }, [accessToken, range.from, range.to, router, staffId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    onRangeChange?.(range.from, range.to, staffId);
+  }, [onRangeChange, range.from, range.to, staffId]);
+
 
   const shown = useMemo(() => records.filter((record) => filter === "ALL" || needsReview(record)), [filter, records]);
   const groups = useMemo(() => {
@@ -353,11 +362,13 @@ export default function AttendanceReviewSection() {
     <section style={{ border: `1px solid ${BORDER}`, borderRadius: 18, background: "#fff", padding: 18, marginBottom: 16, boxShadow: "0 8px 24px rgba(0,0,0,0.05)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div><h2 style={{ margin: 0, fontSize: 22 }}>Attendance Review <span style={{ fontSize: 11, color: BLUE, verticalAlign: "middle" }}>TEST</span></h2><div style={{ marginTop: 6, color: MUTED, fontSize: 13 }}>Review canonical clock records and confirm payable time. Raw clocks are never edited.</div></div>
-        <button type="button" onClick={() => void load()} disabled={loading} style={buttonStyle()}>{loading ? "Refreshing…" : "Refresh review"}</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {onCreateShift && <button type="button" onClick={onCreateShift} style={buttonStyle(true)}>＋ Create Shift</button>}
+          <button type="button" onClick={() => void load()} disabled={loading} style={buttonStyle()}>{loading ? "Refreshing…" : "Refresh"}</button>
+        </div>
       </div>
 
       <div style={{ marginTop: 16, padding: 14, border: `1px solid ${BORDER}`, borderRadius: 12, background: "#F8FAFC" }}>
-        <div style={{ fontWeight: 800, marginBottom: 10 }}>1. Choose what you want to review</div>
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
           {(["DAY", "WEEK", "CUSTOM"] as RangeMode[]).map((mode) => (
             <button key={mode} type="button" onClick={() => setRangeMode(mode)} style={buttonStyle(rangeMode === mode)}>
@@ -380,9 +391,7 @@ export default function AttendanceReviewSection() {
               <button type="button" onClick={() => setWeekStart(addDays(weekStart, -7))} style={buttonStyle()}>Previous week</button>
               <strong>{dateHeading(weekStart)} – {dateHeading(addDays(weekStart, 6))}</strong>
               <button type="button" onClick={() => setWeekStart(thursdayFor(today))} style={buttonStyle()}>This week</button>
-              {addDays(weekStart, 7) <= thursdayFor(today) && (
-                <button type="button" onClick={() => setWeekStart(addDays(weekStart, 7))} style={buttonStyle()}>Next week</button>
-              )}
+              <button type="button" onClick={() => setWeekStart(addDays(weekStart, 7))} style={buttonStyle()}>Next week</button>
             </div>
           )}
           {rangeMode === "CUSTOM" && (
