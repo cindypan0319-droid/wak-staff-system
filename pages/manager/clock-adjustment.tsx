@@ -2164,24 +2164,6 @@ export default function ClockAdjustmentPage() {
                           minWidth: 110,
                         }}
                       >
-                        {canonicalVersion?.payable_start_at && canonicalVersion?.payable_end_at ? (
-                          <div style={{ fontWeight: 800, color: TEXT, whiteSpace: "nowrap" }}>
-                            {shortTime(canonicalVersion.payable_start_at)} – {shortTime(canonicalVersion.payable_end_at)}
-                          </div>
-                        ) : (
-                          <div style={{ color: MUTED, fontSize: 12 }}>—</div>
-                        )}
-                      </td>
-
-                      <td
-                        style={{
-                          padding: "8px 8px",
-                          borderBottom: `1px solid ${BORDER}`,
-                          borderRight: `1px solid ${GRID}`,
-                          verticalAlign: "top",
-                          minWidth: 110,
-                        }}
-                      >
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           {canonical?.openAnomalies?.length ? (
                             canonical.openAnomalies.map((anomaly) => (
